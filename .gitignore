@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv
+env/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+dump/
+*.jsonl
+
+# Internal config (not for open source)
+pip.conf
+pip.ini
+es-metadata.yml
+
+# Database data
+data/database/
+pgdata/
+
+# Temp scripts
+agent_temp_scripts/
+
+# Runtime artifacts (generated files)
+runtime/
+*.log
+
+# Data directory - ignore all except stac_output_mpc_clean.json
+data/db/
+data/benchmarks
+!data/stac/stac_output_mpc_clean.json
+
+# Refactoring notes (internal use only)
+.refactoring/
+.errors/
+.github/
+
+# Test outputs
+*.geojson
+*.tif
+!data/**/*.geojson
+!data/**/*.tif

@@ -1,0 +1,747 @@
+<!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
+<!doctype html>
+<html lang='en'>
+
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width, initial-scale=1' />
+  <title>CRUD Console</title>
+  <link href='/frontend/vendor/bootstrap.min.css' rel='stylesheet' />
+  <link href='https://cdn.datatables.net/2.3.4/css/dataTables.bootstrap5.css' rel='stylesheet' />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body {
+      padding: 1.2rem;
+    }
+
+    .geom-preview {
+      max-height: 160px;
+      overflow: auto;
+      font-size: .75rem;
+      background: #f8f9fa;
+      padding: .5rem;
+    }
+
+    textarea {
+      font-family: monospace;
+    }
+    
+    #detailsModal .modal-body {
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+    
+    #detailsMap {
+      height: 400px;
+      width: 100%;
+      margin-top: 15px;
+    }
+    
+    .detail-section {
+      margin-bottom: 20px;
+    }
+    
+    .detail-label {
+      font-weight: bold;
+      color: #6c757d;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Disasters, Building Damage & Flood Maps</h1>
+  <p class='text-muted'>Workflow: 1) Create Disaster with location information 2) Create Building Damage entries linked to a Disaster (with optional geometry) 3) Upload Flood Maps (merged by DN value).</p>
+  <ul class='nav nav-tabs' id='crudTabs' role='tablist'>
+    <li class='nav-item'><button class='nav-link active' data-bs-toggle='tab' data-bs-target='#disasters'
+        type='button'>Disasters</button></li>
+    <li class='nav-item'><button class='nav-link' data-bs-toggle='tab' data-bs-target='#bda' type='button'>Building
+        Damage</button></li>
+    <li class='nav-item'><button class='nav-link' data-bs-toggle='tab' data-bs-target='#floodMaps' type='button'>Flood
+        Maps</button></li>
+  </ul>
+  <div class='tab-content mt-3'>
+    <div class='tab-pane fade show active' id='disasters'>
+      <h4 id='disasterFormTitle'>Create / Update Disaster</h4>
+      <form id='disasterForm' class='row g-3'>
+        <input type='hidden' name='edit_id' id='disasterEditId'>
+        <div class='col-md-3'><label class='form-label'>Type<input name='disaster_type' class='form-control' required
+              placeholder='flood, wildfire, etc'></label></div>
+        <div class='col-md-3'><label class='form-label'>Date<input name='disaster_date' type='date'
+              class='form-control'></label></div>
+        <div class='col-md-3'><label class='form-label'>Area<input name='area' class='form-control'
+              placeholder='Area name'></label></div>
+        <div class='col-md-3'><label class='form-label'>City<input name='city' class='form-control'
+              placeholder='City name'></label></div>
+        <div class='col-md-3'><label class='form-label'>County<input name='county' class='form-control'
+              placeholder='County name'></label></div>
+        <div class='col-md-3'><label class='form-label'>State<input name='state' class='form-control'
+              placeholder='State name'></label></div>
+        <div class='col-md-3'><label class='form-label'>Country<input name='country' class='form-control'
+              placeholder='Country name'></label></div>
+        <div class='col-12'><label class='form-label'>Description<textarea name='description' rows='2'
+              class='form-control'></textarea></label></div>
+        <div class='col-12'>
+          <button class='btn btn-primary' type='submit' id='disasterSaveBtn'>Save</button>
+          <button class='btn btn-secondary ms-2' type='button' id='disasterCancelBtn' style='display: none;'>Cancel Edit</button>
+        </div>
+      </form>
+      <hr />
+      <h5>Disaster Records</h5>
+      <table class='table table-sm' id='disasterTable'>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Date</th>
+            <th>Location</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class='tab-pane fade' id='bda'>
+      <h4>Create / Update Building Damage Assessment</h4>
+      <form id='bdaForm' class='row g-3'>
+        <div class='col-md-3'><label class='form-label'>Damaged<select name='damaged' class='form-select'>
+              <option value=''>Unknown</option>
+              <option value='true'>True</option>
+              <option value='false'>False</option>
+            </select></label></div>
+        <div class='col-md-3'><label class='form-label'>Damage %<input name='damage_pct' type='number' step='0.01'
+              class='form-control'></label></div>
+        <div class='col-md-6'><label class='form-label'>Disaster<select name='disaster_id' id='bdaDisasterSelect'
+              class='form-select'></select></label></div>
+        <div class='col-12'><label class='form-label'>GeoJSON (paste or upload)</label>
+          <textarea name='geojson' class='form-control' rows='4'></textarea>
+          <input type='file' id='bdaGeoFile' class='form-control mt-1' accept='.json,.geojson'>
+        </div>
+        <div class='col-12'><button class='btn btn-primary' type='submit'>Save</button></div>
+      </form>
+      <div class='mt-3'>
+        <summary class='fw-semibold'>Bulk Upload Building Damage (GeoJSON FeatureCollection)</summary>
+        <form id='bdaBulkForm' class='row g-3 mt-2'>
+          <div class='col-md-4'>
+            <label class='form-label'>Disaster
+              <select name='disaster_id' id='bulkBdaDisasterSelect' class='form-select' required></select>
+            </label>
+          </div>
+          <div class='col-md-4'>
+            <label class='form-label'>Damaged (override all)
+              <select name='damaged' class='form-select'>
+                <option value=''>Auto</option>
+                <option value='true'>True</option>
+                <option value='false'>False</option>
+              </select>
+            </label>
+          </div>
+          <div class='col-md-4'>
+            <label class='form-label w-100'>GeoJSON File
+              <input type='file' name='file' accept='.geojson,.json' class='form-control' required />
+            </label>
+          </div>
+          <div class='col-12'>
+            <button class='btn btn-secondary' type='submit'>Upload Bulk Buildings</button>
+            <span id='bdaBulkStatus' class='ms-2 small text-muted'></span>
+          </div>
+          <div class='col-12 small text-muted'>Each Feature should contain Polygon/MultiPolygon geometry. Optional property <code>damage_pct</code> used if present; sets damaged=true when &gt; 0 unless overridden.</div>
+        </form>
+      </div>
+      <hr />
+      <h5>Records</h5>
+      <table class='table table-sm' id='bdaTable'>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Damaged</th>
+            <th>%</th>
+            <th>Disaster</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class='tab-pane fade' id='floodMaps'>
+      <h4>Upload Flood Map (GeoJSON FeatureCollection)</h4>
+      <p class='small text-muted'>Upload a GeoJSON file containing flood map polygons. Features will be merged into a single MultiPolygon record.</p>
+      <form id='floodMapUploadForm' class='row g-3'>
+        <div class='col-md-6'>
+          <label class='form-label'>Disaster
+            <select name='disaster_id' id='floodMapDisasterSelect' class='form-select' required></select>
+          </label>
+        </div>
+        <div class='col-md-6'>
+          <label class='form-label'>Source (Optional)
+            <input name='source' class='form-control' placeholder='e.g., Kenya Hydrological Survey' />
+          </label>
+        </div>
+        <div class='col-12'>
+          <label class='form-label w-100'>GeoJSON File
+            <input type='file' name='file' accept='.geojson,.json' class='form-control' required />
+          </label>
+        </div>
+        <div class='col-12'>
+          <button class='btn btn-primary' type='submit'>Upload Flood Map</button>
+          <span id='floodMapStatus' class='ms-2 small text-muted'></span>
+        </div>
+        <div class='col-12 small text-muted'>
+          Polygons will be merged into a single MultiPolygon record for this disaster.
+        </div>
+      </form>
+      <hr />
+      <h5>Flood Map Records</h5>
+      <table class='table table-sm' id='floodMapTable'>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Disaster</th>
+            <th>Source</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Details Modal -->
+  <div class="modal fade" id="detailsModal" tabindex="-1" aria-labelledby="detailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="detailsModalLabel">Record Details</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="detailsContent">
+            <div class="text-center">
+              <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+              </div>
+            </div>
+          </div>
+          <div id="detailsMapContainer" style="display: none;">
+            <hr>
+            <h6>Geometry Visualization</h6>
+            <div id="detailsMap"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- jquery -->
+  <script src='https://code.jquery.com/jquery-3.6.0.min.js'></script>
+  <script src='/frontend/vendor/bootstrap.min.js'></script>
+  <script src='https://cdn.datatables.net/2.3.4/js/dataTables.min.js'></script>
+  <script src='https://cdn.datatables.net/2.3.4/js/dataTables.bootstrap5.js'></script>
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // Hold DataTable instances
+    let disasterDT, bdaDT, floodMapDT;
+    let detailsMap = null;
+
+    // Function to show details modal
+    async function showDetailsModal(type, id) {
+      const modal = new bootstrap.Modal(document.getElementById('detailsModal'));
+      const modalTitle = document.getElementById('detailsModalLabel');
+      const modalContent = document.getElementById('detailsContent');
+      const mapContainer = document.getElementById('detailsMapContainer');
+      
+      // Show loading spinner
+      modalContent.innerHTML = `
+        <div class="text-center">
+          <div class="spinner-border" role="status">
+            <span class="visibly-hidden">Loading...</span>
+          </div>
+        </div>
+      `;
+      mapContainer.style.display = 'none';
+      
+      // Set modal title
+      modalTitle.textContent = `${type.charAt(0).toUpperCase() + type.slice(1)} Details - ID: ${id}`;
+      
+      modal.show();
+      
+      try {
+        // Determine API endpoint
+        let endpoint;
+        switch(type) {
+          case 'disaster': endpoint = `/api/disasters/${id}`; break;
+          case 'bda': endpoint = `/api/building_damage/${id}`; break;
+          case 'floodmap': endpoint = `/api/flood_maps/${id}`; break;
+          default: throw new Error('Unknown type');
+        }
+        
+        // Fetch data
+        const response = await fetch(endpoint);
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const data = await response.json();
+        
+        // Display data
+        displayDetailsContent(type, data);
+        
+        // Show map if geometry exists
+        if (data.geojson) {
+          showGeometryOnMap(data.geojson);
+        }
+        
+      } catch (error) {
+        modalContent.innerHTML = `
+          <div class="alert alert-danger" role="alert">
+            Error loading details: ${error.message}
+          </div>
+        `;
+      }
+    }
+
+    function displayDetailsContent(type, data) {
+      const modalContent = document.getElementById('detailsContent');
+      let html = '';
+      
+      switch(type) {
+        case 'disaster':
+          const location = [data.area, data.city, data.county, data.state, data.country].filter(Boolean).join(', ') || 'N/A';
+          html = `
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">ID:</div>
+                  <div>${data.id}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Type:</div>
+                  <div>${data.disaster_type || 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">Date:</div>
+                  <div>${data.disaster_date || 'N/A'}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Location:</div>
+                  <div>${location}</div>
+                </div>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-label">Description:</div>
+              <div>${data.description || 'N/A'}</div>
+            </div>
+          `;
+          break;
+          
+        case 'bda':
+          html = `
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">ID:</div>
+                  <div>${data.id}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Damaged:</div>
+                  <div>${data.damaged !== null ? (data.damaged ? 'Yes' : 'No') : 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">Damage Percentage:</div>
+                  <div>${data.damage_pct !== null ? data.damage_pct + '%' : 'N/A'}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Disaster ID:</div>
+                  <div>${data.disaster_id || 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+          `;
+          break;
+          
+        case 'floodmap':
+          html = `
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">ID:</div>
+                  <div>${data.id}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Disaster ID:</div>
+                  <div>${data.disaster_id || 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="row">
+                <div class="col-md-6">
+                  <div class="detail-label">Source:</div>
+                  <div>${data.source || 'N/A'}</div>
+                </div>
+                <div class="col-md-6">
+                  <div class="detail-label">Created:</div>
+                  <div>${data.created_at || 'N/A'}</div>
+                </div>
+              </div>
+            </div>
+            ${data.metadata ? `
+            <div class="detail-section">
+              <div class="detail-label">Metadata:</div>
+              <div><pre>${JSON.stringify(data.metadata, null, 2)}</pre></div>
+            </div>
+            ` : ''}
+          `;
+          break;
+      }
+      
+      modalContent.innerHTML = html;
+    }
+
+    function showGeometryOnMap(geojson) {
+      const mapContainer = document.getElementById('detailsMapContainer');
+      const mapDiv = document.getElementById('detailsMap');
+      
+      mapContainer.style.display = 'block';
+      
+      // Destroy existing map if it exists
+      if (detailsMap) {
+        detailsMap.remove();
+        detailsMap = null;
+      }
+      
+      // Create new map
+      detailsMap = L.map('detailsMap').setView([0, 0], 2);
+      
+      // Add OpenStreetMap tiles
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(detailsMap);
+      
+      // Add geometry to map
+      const geojsonLayer = L.geoJSON(geojson, {
+        style: {
+          color: '#3388ff',
+          weight: 2,
+          opacity: 0.8,
+          fillColor: '#3388ff',
+          fillOpacity: 0.2
+        }
+      }).addTo(detailsMap);
+      
+      // Fit map to geometry bounds
+      detailsMap.fitBounds(geojsonLayer.getBounds());
+    }
+
+    function ensureDisasterDT(rows) {
+      if (!disasterDT) {
+        disasterDT = new DataTable('#disasterTable', {
+          data: rows,
+            columns: [
+              { title: 'ID' },
+              { title: 'Type' },
+              { title: 'Date' },
+              { title: 'Location' },
+              { title: '' }
+            ],
+            pageLength: 25,
+            destroy: true
+        });
+      } else {
+        disasterDT.clear();
+        disasterDT.rows.add(rows).draw();
+      }
+    }
+    function ensureBdaDT(rows) {
+      if (!bdaDT) {
+        bdaDT = new DataTable('#bdaTable', {
+          data: rows,
+          columns: [
+            { title: 'ID' },
+            { title: 'Damaged' },
+            { title: '%' },
+            { title: 'Disaster' },
+            { title: '' }
+          ],
+          pageLength: 25,
+          destroy: true
+        });
+      } else {
+        bdaDT.clear();
+        bdaDT.rows.add(rows).draw();
+      }
+    }
+    
+    function ensureFloodMapDT(rows) {
+      if (!floodMapDT) {
+        floodMapDT = new DataTable('#floodMapTable', {
+          data: rows,
+          columns: [
+            { title: 'ID' },
+            { title: 'Disaster' },
+            { title: 'Source' },
+            { title: '' }
+          ],
+          pageLength: 25,
+          destroy: true
+        });
+      } else {
+        floodMapDT.clear();
+        floodMapDT.rows.add(rows).draw();
+      }
+    }
+
+    async function fetchBda() {
+      const res = await fetch('/api/building_damage');
+      const data = await res.json();
+      const rows = data.items.map(r => [
+        r.id,
+        r.damaged,
+        r.damage_pct ?? '',
+        r.disaster_id ?? '',
+        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='bda'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='bda'>Del</button>`
+      ]);
+      ensureBdaDT(rows);
+    }
+    
+    async function fetchFloodMaps() {
+      const res = await fetch('/api/flood_maps');
+      const data = await res.json();
+      const rows = data.items.map(r => [
+        r.id,
+        r.disaster_id ?? '',
+        r.source ?? '',
+        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='floodmap'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='floodmap'>Del</button>`
+      ]);
+      ensureFloodMapDT(rows);
+    }
+    async function fetchDisasters() {
+      const res = await fetch('/api/disasters');
+      const data = await res.json();
+      const rows = data.items.map(r => {
+        const location = [r.area, r.city, r.county, r.state, r.country].filter(Boolean).join(', ') || '';
+        return [
+          r.id,
+          r.disaster_type,
+          r.disaster_date ?? '',
+          location,
+          `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='disaster'>View</button><button class='btn btn-sm btn-outline-warning me-1' data-id='${r.id}' data-edit='disaster'>Edit</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='disaster'>Del</button>`
+        ];
+      });
+      ensureDisasterDT(rows);
+    }
+    async function loadLookups() {
+      const disastersRes = await fetch('/api/lookups/disasters');
+      const disasters = await disastersRes.json();
+      const bdaDisSel = document.getElementById('bdaDisasterSelect');
+      bdaDisSel.innerHTML = '<option value="">-- None --</option>' + disasters.map(d => `<option value='${d.id}'>${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+      // Repopulate bulk selects too
+      const bulkBdaDisSel = document.getElementById('bulkBdaDisasterSelect');
+      if (bulkBdaDisSel) {
+        // console.log(disasters)
+        bulkBdaDisSel.innerHTML = disasters.map(d => `<option value='${d.id}'>${d.area} ${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+      }
+      // Populate flood map disaster select
+      const floodMapDisSel = document.getElementById('floodMapDisasterSelect');
+      if (floodMapDisSel) {
+        floodMapDisSel.innerHTML = disasters.map(d => `<option value='${d.id}'>${d.area} ${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+      }
+    }
+    document.body.addEventListener('click', async e => {
+      const btn = e.target.closest('button[data-del]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const kind = btn.dataset.del;
+      if (kind === 'disaster') { await fetch('/api/disasters/' + id, { method: 'DELETE' }); fetchDisasters(); loadLookups(); }
+      if (kind === 'bda') { await fetch('/api/building_damage/' + id, { method: 'DELETE' }); fetchBda(); }
+      if (kind === 'floodmap') { await fetch('/api/flood_maps/' + id, { method: 'DELETE' }); fetchFloodMaps(); }
+    });
+
+    // Handle view button clicks
+    document.body.addEventListener('click', async e => {
+      const btn = e.target.closest('button[data-view]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const kind = btn.dataset.view;
+      await showDetailsModal(kind, id);
+    });
+    
+    // Handle edit button clicks
+    document.body.addEventListener('click', async e => {
+      const btn = e.target.closest('button[data-edit]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const kind = btn.dataset.edit;
+      if (kind === 'disaster') {
+        await loadDisasterForEdit(id);
+      }
+    });
+    
+    // Load disaster data into form for editing
+    async function loadDisasterForEdit(id) {
+      try {
+        const res = await fetch(`/api/disasters/${id}`);
+        if (!res.ok) throw new Error('Failed to fetch disaster');
+        const data = await res.json();
+        
+        // Populate form fields
+        const form = document.getElementById('disasterForm');
+        form.querySelector('[name="disaster_type"]').value = data.disaster_type || '';
+        form.querySelector('[name="disaster_date"]').value = data.disaster_date || '';
+        form.querySelector('[name="area"]').value = data.area || '';
+        form.querySelector('[name="city"]').value = data.city || '';
+        form.querySelector('[name="county"]').value = data.county || '';
+        form.querySelector('[name="state"]').value = data.state || '';
+        form.querySelector('[name="country"]').value = data.country || '';
+        form.querySelector('[name="description"]').value = data.description || '';
+        
+        // Set hidden edit ID
+        document.getElementById('disasterEditId').value = id;
+        
+        // Update UI to show edit mode
+        document.getElementById('disasterFormTitle').textContent = `Edit Disaster (ID: ${id})`;
+        document.getElementById('disasterSaveBtn').textContent = 'Update';
+        document.getElementById('disasterCancelBtn').style.display = 'inline-block';
+        
+        // Scroll to form
+        form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        alert('Error loading disaster: ' + error.message);
+      }
+    }
+    
+    // Cancel edit mode and reset form
+    document.getElementById('disasterCancelBtn').addEventListener('click', function() {
+      const form = document.getElementById('disasterForm');
+      form.reset();
+      document.getElementById('disasterEditId').value = '';
+      document.getElementById('disasterFormTitle').textContent = 'Create / Update Disaster';
+      document.getElementById('disasterSaveBtn').textContent = 'Save';
+      this.style.display = 'none';
+    });
+    
+    function handleFile(inputId, textarea) {
+      document.getElementById(inputId).addEventListener('change', async ev => {
+        const f = ev.target.files[0]; if (!f) return; const txt = await f.text(); textarea.value = txt;
+      });
+    }
+    handleFile('bdaGeoFile', document.querySelector('#bdaForm textarea[name=geojson]'));
+    document.getElementById('bdaForm').addEventListener('submit', async ev => {
+      ev.preventDefault(); const fd = new FormData(ev.target); const payload = { damaged: fd.get('damaged') === '' ? null : fd.get('damaged') === 'true', damage_pct: fd.get('damage_pct') ? Number(fd.get('damage_pct')) : null, disaster_id: fd.get('disaster_id') ? Number(fd.get('disaster_id')) : null }; const gj = fd.get('geojson'); if (gj) { try { payload.geojson = JSON.parse(gj); } catch (e) { alert('Invalid GeoJSON'); return; } }; await fetch('/api/building_damage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); ev.target.reset(); fetchBda();
+    });
+    document.getElementById('disasterForm').addEventListener('submit', async ev => {
+      ev.preventDefault(); 
+      const fd = new FormData(ev.target);
+      const editId = fd.get('edit_id');
+      
+      const payload = { 
+        disaster_type: fd.get('disaster_type'), 
+        disaster_date: fd.get('disaster_date') || null, 
+        description: fd.get('description') || null, 
+        area: fd.get('area') || null,
+        city: fd.get('city') || null,
+        county: fd.get('county') || null,
+        state: fd.get('state') || null,
+        country: fd.get('country') || null
+      };
+      
+      try {
+        let res;
+        if (editId) {
+          // Update existing disaster
+          res = await fetch(`/api/disasters/${editId}`, { 
+            method: 'PUT', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(payload) 
+          });
+        } else {
+          // Create new disaster
+          res = await fetch('/api/disasters', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(payload) 
+          });
+        }
+        
+        if (!res.ok) {
+          const error = await res.json();
+          throw new Error(error.detail || 'Failed to save disaster');
+        }
+        
+        // Reset form and UI
+        ev.target.reset();
+        document.getElementById('disasterEditId').value = '';
+        document.getElementById('disasterFormTitle').textContent = 'Create / Update Disaster';
+        document.getElementById('disasterSaveBtn').textContent = 'Save';
+        document.getElementById('disasterCancelBtn').style.display = 'none';
+        
+        // Refresh tables
+        fetchDisasters(); 
+        loadLookups();
+        
+        // Show success message
+        alert(editId ? 'Disaster updated successfully!' : 'Disaster created successfully!');
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    });
+    // Bulk building damage submit
+    document.getElementById('bdaBulkForm').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const status = document.getElementById('bdaBulkStatus');
+      status.textContent = 'Uploading...';
+      const fd = new FormData(ev.target);
+      try {
+        const res = await fetch('/api/building_damage/bulk_geojson', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Bulk upload failed');
+        status.textContent = `Inserted ${data.inserted_count}`;
+        fetchBda();
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+      }
+    });
+    
+    // Flood map upload submit
+    document.getElementById('floodMapUploadForm').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const status = document.getElementById('floodMapStatus');
+      status.textContent = 'Uploading and merging polygons...';
+      const fd = new FormData(ev.target);
+      try {
+        const res = await fetch('/api/flood_maps/upload_geojson', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Upload failed');
+        status.textContent = `Success! Inserted ${data.inserted_count} record(s)`;
+        ev.target.reset();
+        fetchFloodMaps();
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+      }
+    });
+    // Clean up map when modal is closed
+    document.getElementById('detailsModal').addEventListener('hidden.bs.modal', function () {
+      if (detailsMap) {
+        detailsMap.remove();
+        detailsMap = null;
+      }
+      document.getElementById('detailsMapContainer').style.display = 'none';
+    });
+
+    fetchDisasters(); fetchBda(); fetchFloodMaps(); loadLookups();
+  </script>
+</body>
+
+</html>
