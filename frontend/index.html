@@ -1,0 +1,453 @@
+<!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoFaham - Interactive Geospatial Analysis</title>
+    
+    <!-- Azure Maps SDK -->
+    <link rel="stylesheet" href="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.css">
+    <script src="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.js"></script>
+    
+    <!-- Azure Maps Drawing Tools -->
+    <link rel="stylesheet" href="https://atlas.microsoft.com/sdk/javascript/drawing/0/atlas-drawing.min.css" type="text/css" />
+    <script src="https://atlas.microsoft.com/sdk/javascript/drawing/0/atlas-drawing.min.js"></script>
+    
+    <!-- Azure Maps Extensions -->
+    <link rel="stylesheet" href="/frontend/vendor/azure-maps-layer-legend.min.css" type="text/css" />
+    <script src="/frontend/vendor/azure-maps-layer-legend.min.js"></script>
+    <script src="https://atlas.microsoft.com/sdk/javascript/spatial/0/atlas-spatial.min.js"></script>
+    
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Application CSS -->
+    <link href="/frontend/css/main.css" rel="stylesheet" type="text/css" />
+</head>
+
+<body>
+    <!-- Application Header -->
+    <header class="app-header">
+        <h1 class="app-title">
+            <i class="fas fa-globe-americas"></i>
+            GeoFaham
+        </h1>
+        <div class="header-actions">
+            <!-- Debug Mode Toggle -->
+            <button class="upload-btn" id="debug-mode-toggle" title="Toggle Debug Mode" aria-label="Show or hide test buttons">
+                <i class="fas fa-bug" aria-hidden="true"></i>
+                Debug Mode
+            </button>
+            
+            <!-- Agent Mode Selector -->
+            <div class="mode-selector">
+                <label for="agent-mode-select" style="font-size: 0.85rem; color: #e2e8f0; margin-right: 0.5rem;">
+                    <i class="fas fa-robot"></i> Agent Mode:
+                </label>
+                <select id="agent-mode-select" class="mode-select" title="Select agent mode">
+                    <option value="multi-agent" selected>Multi-Agent Team</option>
+                    <option value="postgis">PostGIS Agent</option>
+                    <option value="map_search">Map Search Agent</option>
+                    <option value="stac">STAC Agent</option>
+                    <option value="raster_ops">RasterOps Agent</option>
+                </select>
+            </div>
+            
+            <button class="upload-btn" id="upload-button" title="Upload GeoJSON File" aria-label="Upload your own GeoJSON file">
+                <i class="fas fa-upload" aria-hidden="true"></i>
+                Upload
+            </button>
+            
+            <button class="upload-btn debug-only" id="visualize-button" title="Visualize GeoJSON File" aria-label="Visualize a GeoJSON file without uploading" style="display: none;">
+                <i class="fas fa-eye" aria-hidden="true"></i>
+                Visualize
+            </button>
+            
+            <button class="upload-btn debug-only" id="test-raster-button" title="Test Raster Visualization" aria-label="Test raster visualization with sample TIF file" style="display: none;">
+                <i class="fas fa-image" aria-hidden="true"></i>
+                Test Raster
+            </button>
+            
+            <button class="upload-btn debug-only" id="test-mosaic-button" title="Test Temporal Mosaic" aria-label="Test temporal mosaic visualization with sample data" style="display: none;">
+                <i class="fas fa-layer-group" aria-hidden="true"></i>
+                Test Mosaic
+            </button>
+            
+            <button class="upload-btn debug-only" id="test-multiband-button" title="Test Multi-Band Mosaic" aria-label="Test multi-band STAC mosaic with spatial grouping" style="display: none;">
+                <i class="fas fa-satellite-dish" aria-hidden="true"></i>
+                Test Multi-Band
+            </button>
+            
+            <button class="reset-btn" id="reset-button" title="Reset Chat and Map" aria-label="Reset application - clears all chat messages and map data">
+                <i class="fas fa-refresh" aria-hidden="true"></i>
+                Reset
+            </button>
+            
+            <button class="upload-btn debug-only" id="save-gt-button" title="Save Benchmark Ground Truth" aria-label="Save current conversation as benchmark ground truth" style="display: none;">
+                <i class="fas fa-save" aria-hidden="true"></i>
+                Save GT
+            </button>
+            
+            <div class="connection-status connected" id="connection-status">
+                <div class="status-indicator"></div>
+                <span id="status-text">Connected</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Application Container -->
+    <div class="app-container">
+        <!-- Map Section -->
+        <div class="map-section">
+            <div id="map"></div>
+            
+            <!-- Map Controls -->
+            <div class="map-controls">
+                <!-- Map Style Controls -->
+                <div class="control-group">
+                    <h4><i class="fas fa-layer-group"></i> Map Style</h4>
+                    <div class="map-style-controls">
+                        <button class="style-btn" data-style="road">
+                            <i class="fas fa-road"></i> Road
+                        </button>
+                        <button class="style-btn" data-style="satellite">
+                            <i class="fas fa-satellite"></i> Satellite
+                        </button>
+                        <button class="style-btn active" data-style="satellite_road_labels">
+                            <i class="fas fa-map"></i> Hybrid
+                        </button>
+                        <button class="style-btn" data-style="grayscale_dark">
+                            <i class="fas fa-moon"></i> Dark
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Drawing Tools -->
+                <div class="control-group">
+                    <h4><i class="fas fa-tools"></i> Selection Tools</h4>
+                    <div class="drawing-controls">
+                        <button class="tool-btn" id="select-tool" data-tool="select" title="Select">
+                            <i class="fas fa-mouse-pointer"></i>
+                        </button>
+                        <button class="tool-btn" id="point-tool" data-tool="draw-point" title="Draw Point">
+                            <i class="fas fa-map-pin"></i>
+                        </button>
+                        <button class="tool-btn" id="line-tool" data-tool="draw-line" title="Draw Line">
+                            <i class="fas fa-minus"></i>
+                        </button>
+                        <button class="tool-btn" id="polygon-tool" data-tool="draw-polygon" title="Draw Polygon">
+                            <i class="fas fa-draw-polygon"></i>
+                        </button>
+                        <button class="tool-btn" id="rectangle-tool" data-tool="draw-rectangle" title="Draw Rectangle">
+                            <i class="fas fa-square"></i>
+                        </button>
+                        <button class="tool-btn" id="circle-tool" data-tool="draw-circle" title="Draw Circle">
+                            <i class="fas fa-circle"></i>
+                        </button>
+                        <button class="tool-btn" id="measure-tool" data-tool="measure" title="Measure Distance">
+                            <i class="fas fa-ruler"></i>
+                        </button>
+                        <button class="tool-btn" id="clear-tool" data-tool="clear" title="Clear All">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Layer Controls -->
+                <div class="control-group">
+                    <h4><i class="fas fa-layers"></i> Layers</h4>
+                    <div id="layer-controls"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Section -->
+        <div class="chat-section">
+            <div class="chat-header">
+                <div>
+                    <h2 class="chat-title">
+                        <i class="fas fa-comments"></i>
+                        AI Assistant
+                    </h2>
+                    <p class="chat-subtitle">Ask questions about geospatial data</p>
+                </div>
+                <button class="expand-chat-btn" id="expand-chat-btn" title="Expand/Collapse Chat">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            
+            <div id="messages"></div>
+            
+            <div class="chat-input-container">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="message-input" 
+                        placeholder="Ask me about geospatial data, buildings, disasters, or anything map-related..."
+                        rows="1"></textarea>
+                    <input type="hidden" name="user_raw_json" id="user_raw_json" value=''/>
+                    <button id="send-button">
+                        <i class="fas fa-paper-plane"></i>
+                        Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload GeoJSON Modal -->
+    <div id="upload-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-upload"></i> Upload GeoJSON File</h2>
+                <button class="modal-close" id="close-modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="file-title">Title *</label>
+                        <input 
+                            type="text" 
+                            id="file-title" 
+                            name="title" 
+                            placeholder="e.g., Downtown Area Boundary"
+                            required
+                        />
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="file-description">Description</label>
+                        <textarea 
+                            id="file-description" 
+                            name="description" 
+                            placeholder="Brief description of this GeoJSON file (optional)..."
+                            rows="3"
+                        ></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>GeoJSON File *</label>
+                        <div 
+                            id="drop-zone" 
+                            class="drop-zone"
+                        >
+                            <input 
+                                type="file" 
+                                id="file-input" 
+                                name="file" 
+                                accept=".geojson,.json"
+                                style="display: none;"
+                            />
+                            <div class="drop-zone-content">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                                <p class="drop-zone-text">
+                                    <strong>Drag and drop</strong> your GeoJSON file here<br/>
+                                    or <span class="browse-link">browse</span>
+                                </p>
+                                <p class="drop-zone-hint">Supports .geojson and .json files</p>
+                            </div>
+                            <div id="file-preview" class="file-preview" style="display: none;">
+                                <i class="fas fa-file-alt"></i>
+                                <span id="file-name"></span>
+                                <button type="button" id="remove-file" class="remove-file-btn">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="upload-error" class="upload-error" style="display: none;"></div>
+                    
+                    <div class="modal-actions">
+                        <button type="button" class="btn-secondary" id="cancel-upload">
+                            Cancel
+                        </button>
+                        <button type="submit" class="btn-primary" id="submit-upload" disabled>
+                            <i class="fas fa-upload"></i>
+                            Upload
+                        </button>
+                    </div>
+                    
+                    <div id="upload-progress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                        <p class="progress-text">Uploading...</p>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Visualize GeoJSON Modal (no upload) -->
+    <div id="visualize-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-eye"></i> Visualize GeoJSON File</h2>
+                <button class="modal-close" id="close-visualize-modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="modal-body">
+                <p style="margin-bottom: 1rem; color: #6b7280; font-size: 0.9rem;">
+                    <i class="fas fa-info-circle"></i> Preview a GeoJSON file on the map without saving it to the server.
+                </p>
+                
+                <div class="form-group">
+                    <label>Select GeoJSON File</label>
+                    <div 
+                        id="visualize-drop-zone" 
+                        class="drop-zone"
+                    >
+                        <input 
+                            type="file" 
+                            id="visualize-file-input" 
+                            accept=".geojson,.json"
+                            style="display: none;"
+                        />
+                        <div class="drop-zone-content">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <p class="drop-zone-text">
+                                <strong>Drag and drop</strong> your GeoJSON file here<br/>
+                                or <span class="browse-link">browse</span>
+                            </p>
+                            <p class="drop-zone-hint">Supports .geojson and .json files (up to 50MB)</p>
+                        </div>
+                        <div id="visualize-file-preview" class="file-preview" style="display: none;">
+                            <i class="fas fa-file-alt"></i>
+                            <span id="visualize-file-name"></span>
+                            <button type="button" id="remove-visualize-file" class="remove-file-btn">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="visualize-error" class="upload-error" style="display: none;"></div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancel-visualize">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn-primary" id="visualize-submit" disabled>
+                        <i class="fas fa-eye"></i>
+                        Visualize
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Benchmark GT Modal -->
+    <div id="save-gt-modal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-save"></i> Save Benchmark Ground Truth</h2>
+                <button class="modal-close" id="close-save-gt-modal">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="modal-body">
+                <p style="margin-bottom: 1rem; color: #6b7280; font-size: 0.9rem;">
+                    <i class="fas fa-info-circle"></i> Save the current conversation as benchmark ground truth data.
+                </p>
+                
+                <div class="form-group">
+                    <label for="question-number-input">Question Number *</label>
+                    <input 
+                        type="text" 
+                        id="question-number-input" 
+                        placeholder="e.g., Q001"
+                        style="width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 0.5rem; font-size: 1rem;"
+                    />
+                    <p style="margin-top: 0.5rem; color: #6b7280; font-size: 0.8rem;">
+                        Files will be saved to: benchmark_gt/{question}/run_X/
+                    </p>
+                </div>
+                
+                <div id="save-gt-error" class="upload-error" style="display: none;"></div>
+                <div id="save-gt-success" style="display: none; padding: 0.75rem; background: #d1fae5; border-radius: 0.5rem; color: #065f46; margin-bottom: 1rem;"></div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancel-save-gt">
+                        Cancel
+                    </button>
+                    <button type="button" class="btn-primary" id="submit-save-gt">
+                        <i class="fas fa-save"></i>
+                        Save GT
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Analysis Toolbox -->
+    <div id="toolbox-container" class="toolbox-container">
+        <button id="toolbox-toggle" class="toolbox-toggle" title="Analysis Tools">
+            <i class="fas fa-toolbox"></i>
+        </button>
+        
+        <div id="toolbox-panel" class="toolbox-panel" style="display: none;">
+            <div class="toolbox-header">
+                <h3><i class="fas fa-toolbox"></i> Analysis Tools</h3>
+                <button id="toolbox-close" class="toolbox-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="toolbox-content">
+                <p class="toolbox-description">
+                    Use AI-powered tools to analyze the current map view
+                </p>
+                
+                <div id="toolbox-tools" class="toolbox-tools">
+                    <!-- Tools will be dynamically loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Scripts - Modular Structure -->
+    <!-- Core Modules -->
+    <script src="/frontend/js/config.js"></script>
+    <script src="/frontend/js/core/state.js"></script>
+    <script src="/frontend/js/core/utils.js"></script>
+    <script src="/frontend/js/core/response-router.js"></script>
+    <script src="/frontend/js/core/websocket.js"></script>
+    
+    <!-- Chat Modules -->
+    <script src="/frontend/js/chat/chat-ui.js"></script>
+    <script src="/frontend/js/chat/message-handler.js"></script>
+    
+    <!-- Map Modules -->
+    <script src="/frontend/js/map/map-init.js"></script>
+    <script src="/frontend/js/map/map-controls.js"></script>
+    <script src="/frontend/js/map/map-layers.js"></script>
+    <script src="/frontend/js/map/map-tools.js"></script>
+    
+    <!-- Layer Modules -->
+    <script src="/frontend/js/layers/base-timeline-manager.js"></script>
+    <script src="/frontend/js/layers/temporal-mosaic.js"></script>
+    <script src="/frontend/js/layers/temporal-cog-timeline.js"></script>
+    <script src="/frontend/js/layers/raster-controls.js"></script>
+    <script src="/frontend/js/layers/layer-renderer.js"></script>
+    
+    <!-- Modal Modules -->
+    <script src="/frontend/js/modals/upload-modal.js"></script>
+    <script src="/frontend/js/modals/visualize-modal.js"></script>
+    <script src="/frontend/js/modals/benchmark-modal.js"></script>
+    
+    <!-- Main Application Entry Point -->
+    <script src="/frontend/js/app.js"></script>
+</body>
+
+</html>
