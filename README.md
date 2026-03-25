@@ -135,7 +135,7 @@ Database   Nominatim  Computer  Executor
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/GeoFaham.git
+git clone https://github.com/microsoft/GeoFaham.git
 cd GeoFaham
 
 # Create virtual environment
