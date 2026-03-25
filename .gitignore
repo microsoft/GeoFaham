@@ -45,7 +45,7 @@ Thumbs.db
 dump/
 *.jsonl
 
-# Internal config (not for open source)
+# Internal config
 pip.conf
 pip.ini
 es-metadata.yml
@@ -66,10 +66,9 @@ data/db/
 data/benchmarks
 !data/stac/stac_output_mpc_clean.json
 
-# Refactoring notes (internal use only)
+# Refactoring notes
 .refactoring/
 .errors/
-.github/
 
 # Test outputs
 *.geojson
