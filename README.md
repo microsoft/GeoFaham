@@ -1,12 +1,12 @@
 <p align="center">
   <h1 align="center">🌍 GeoFaham</h1>
   <p align="center">
-    <strong>AI-Powered Geospatial Analysis Platform for Disaster Assessment</strong>
+    <strong>AI-Powered Geospatial Analysis Platform</strong>
   </p>
   <p align="center">
     Multi-agent system combining satellite imagery, OpenStreetMap data, and PostGIS databases
     <br />
-    for comprehensive disaster damage analysis and geospatial intelligence.
+    for comprehensive geospatial analysis and intelligence.
   </p>
 </p>
 
@@ -23,14 +23,22 @@
 
 ## Overview
 
-GeoFaham is an intelligent geospatial analysis platform that leverages multiple AI agents to automate disaster damage assessment workflows. It combines:
+GeoFaham is an intelligent geospatial analysis platform that leverages multiple AI agents to automate complex geospatial workflows through natural language. It combines:
 
 - **Satellite Imagery** from Microsoft Planetary Computer (Sentinel-2, Landsat, SAR)
 - **OpenStreetMap** features (buildings, roads, infrastructure)
-- **PostGIS Database** with disaster records and damage assessments
+- **PostGIS Database** for spatial queries and geospatial records
 - **Raster Analysis** with automated Python code generation
 
 The system uses [AutoGen](https://github.com/microsoft/autogen) for multi-agent orchestration, allowing natural language queries to be automatically decomposed into specialized agent tasks.
+
+While primarily tested with **disaster response** scenarios (wildfire damage, flood assessment), GeoFaham is designed as a general-purpose geospatial analysis tool applicable to a wide range of domains:
+
+- 🏙️ **Urban Planning** — Land use analysis, zoning studies, building footprint extraction
+- 🏗️ **Infrastructure Analysis** — Road networks, bridges, utility corridors, transport accessibility
+- 🌱 **Climate & Environmental Monitoring** — Vegetation health (NDVI), deforestation tracking, water body changes
+- 👥 **Population Analysis** — Population density mapping, exposure assessments, demographic overlays
+- 🔥 **Disaster Response** — Burn severity mapping, flood extent detection, building damage classification
 
 ## Features
 
@@ -42,12 +50,12 @@ The system uses [AutoGen](https://github.com/microsoft/autogen) for multi-agent 
 - **Raster Ops Agent** - Python code generation for raster analysis
 
 ### 🗺️ Geospatial Capabilities
-- Burn severity mapping and wildfire analysis
-- Flood extent detection and damage assessment
-- Building damage classification
-- Vegetation health monitoring (NDVI, NBR)
-- Population exposure analysis
-- Infrastructure impact assessment
+- Satellite imagery search and raster index computation (NDVI, NBR, NDWI, etc.)
+- OpenStreetMap feature extraction (buildings, roads, POIs, land use, and more)
+- Spatial queries against PostGIS databases with GeoJSON integration
+- Population density mapping and exposure analysis
+- Automated Python code generation for custom raster analysis
+- Infrastructure and land use assessment
 
 ### 🖥️ Interactive Web Interface
 - Real-time chat with AI agents
@@ -188,9 +196,11 @@ Visit `http://localhost:8005` to access the web interface.
 
 1. Open `http://localhost:8005` in your browser
 2. Type your query in the chat input, e.g.:
-   - "Show me damaged buildings in the Lahaina fire area"
-   - "Calculate burn severity for the 2023 Maui wildfire"
-   - "Find hospitals within 5km of the flood zone"
+   - "Show me all schools and hospitals in downtown Seattle"
+   - "Calculate NDVI for agricultural areas around Sacramento in July 2024"
+   - "Find all bridges and major roads within 10km of the river"
+   - "What is the population density in the coastal zones of Miami?"
+   - "Assess burn severity for the 2023 Maui wildfire area"
 3. Watch the agents collaborate to answer your query
 4. View results on the interactive map
 
@@ -208,7 +218,7 @@ python -m tests.console_test --agent raster
 python -m tests.console_test --agent team
 
 # Single query mode
-python -m tests.console_test --agent maps --query "Get boundary for Lahaina, Hawaii"
+python -m tests.console_test --agent maps --query "Get boundary for Seattle, Washington"
 
 # Test individual tools
 python -m tests.tool_test --agent maps --list
