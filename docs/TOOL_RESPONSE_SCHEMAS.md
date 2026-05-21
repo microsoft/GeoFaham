@@ -669,7 +669,7 @@ All OSM feature tools share the same response schema.
       },
       "dnbr": {
         "type": "single_layer",
-        "url": "/home/t-mdanish/azurefiles/qe/GeoFaham/runtime/artifacts/query_jsons/raster_code_result_1b0d9cfe.tif",
+        "url": "runtime/artifacts/query_jsons/raster_code_result_1b0d9cfe.tif",
         "statistics": {
             "shape": [
                 261,

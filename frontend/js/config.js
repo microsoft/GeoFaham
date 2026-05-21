@@ -3,29 +3,34 @@
 
 /**
  * Frontend Configuration
- * Centralized configuration for all frontend modules
+ * Centralized configuration for all frontend modules.
+ *
+ * Per-deployment values (e.g. the Azure Maps subscription key) are not
+ * stored here. The frontend fetches them from `/api/config` at boot
+ * time and the relevant modules build their config objects at runtime.
  */
+
+const _wsScheme = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss:' : 'ws:';
+const _wsHost = (typeof location !== 'undefined' && location.host) ? location.host : 'localhost:8010';
 
 const GeoFahamConfig = {
     // Server configuration
     server: {
-        wsUrl: `wss://fv45731x-8010.usw3.devtunnels.ms/ws/chat`,
+        wsUrl: `${_wsScheme}//${_wsHost}/ws/chat`,
         apiBaseUrl: '',  // Same origin
+        configUrl: '/api/config',
         historyUrl: '/history',
         resetUrl: '/api/reset',
         uploadUrl: '/api/upload-geojson',
         analyzeRasterUrl: '/api/analyze-raster',
-        testRasterUrl: '/api/test-raster',
         saveBenchmarkUrl: '/api/save-benchmark-gt',
         colormapsUrl: '/titiler_colormaps.json'
     },
 
     // Azure Maps configuration
+    // `authOptions` is intentionally omitted here; MapInit builds it at
+    // runtime from the value returned by `/api/config`.
     map: {
-        authOptions: {
-            authType: 'subscriptionKey',
-            subscriptionKey: 'CBo-GuNI4N4tTylXj173p4OQus0f8qztuCLq042kgd4'
-        },
         defaultCenter: [0, 20],
         defaultZoom: 2,
         defaultStyle: 'satellite_road_labels',
