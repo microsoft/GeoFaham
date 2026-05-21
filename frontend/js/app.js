@@ -10,9 +10,38 @@ const GeoFahamApp = {
     /**
      * Initialize the application
      */
-    init: function() {
+    init: async function() {
         console.log('GeoFaham Application Initializing...');
-        
+
+        // Fetch per-deployment runtime config (e.g. the Azure Maps key)
+        // before any module that depends on it is initialized.
+        let runtimeConfig;
+        try {
+            const response = await fetch(GeoFahamConfig.server.configUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            runtimeConfig = await response.json();
+        } catch (error) {
+            console.error('Failed to load runtime config from server:', error);
+            this._showFatalError(
+                'Failed to load application configuration from the server. ' +
+                'The map will not load. Please check the server logs.'
+            );
+            return;
+        }
+
+        if (!runtimeConfig || !runtimeConfig.azureMapsKey) {
+            console.error('Server returned an empty Azure Maps key.');
+            this._showFatalError(
+                'Azure Maps key is not configured on the server ' +
+                '(AZURE_MAPS_KEY). The map cannot be initialized.'
+            );
+            return;
+        }
+
+        GeoFahamState.runtimeConfig = runtimeConfig;
+
         // Initialize WebSocket connection
         WebSocketManager.init();
         
@@ -23,7 +52,7 @@ const GeoFahamApp = {
         MapControls.init();
         
         // Initialize Map
-        MapInit.init();
+        MapInit.init(runtimeConfig.azureMapsKey);
         
         // Setup mode selector
         this.setupModeSelector();
@@ -46,6 +75,24 @@ const GeoFahamApp = {
         this.initializeToolboxWhenReady();
         
         console.log('GeoFaham Application Initialized');
+    },
+
+    /**
+     * Render a fatal initialization error to the user.
+     * Falls back to a plain DOM element if ChatUI is not available yet.
+     */
+    _showFatalError: function(message) {
+        try {
+            if (typeof ChatUI !== 'undefined' && typeof ChatUI.displayMessage === 'function') {
+                ChatUI.displayMessage(message, 'error');
+                return;
+            }
+        } catch (_) { /* fall through to DOM fallback */ }
+        const banner = document.createElement('div');
+        banner.setAttribute('role', 'alert');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;padding:12px;background:#b00020;color:#fff;font-family:sans-serif;z-index:99999;text-align:center;';
+        banner.textContent = message;
+        document.body.appendChild(banner);
     },
 
     /**
@@ -230,15 +277,6 @@ const GeoFahamApp = {
      * Setup test buttons
      */
     setupTestButtons: function() {
-        // Test Raster Button
-        const testRasterButton = document.getElementById('test-raster-button');
-        if (testRasterButton) {
-            testRasterButton.addEventListener('click', async (event) => {
-                event.preventDefault();
-                await this.testRasterVisualization();
-            });
-        }
-        
         // Test Mosaic Button
         const testMosaicButton = document.getElementById('test-mosaic-button');
         if (testMosaicButton) {
@@ -255,29 +293,6 @@ const GeoFahamApp = {
                 event.preventDefault();
                 this.testMultibandVisualization();
             });
-        }
-    },
-
-    /**
-     * Test raster visualization
-     */
-    testRasterVisualization: async function() {
-        try {
-            ChatUI.displayMessage('Loading test raster...', 'system');
-            
-            const response = await fetch(GeoFahamConfig.server.testRasterUrl);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const rasterMessage = await response.json();
-            LayerRenderer.renderRasterLayer({ data: rasterMessage.data });
-            
-            ChatUI.displayMessage('Test raster loaded: Saint Louis 2025 Imagery', 'system');
-            
-        } catch (error) {
-            console.error('Error loading test raster:', error);
-            ChatUI.displayMessage(`Error loading test raster: ${error.message}`, 'error');
         }
     },
 

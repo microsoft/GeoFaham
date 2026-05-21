@@ -8,17 +8,27 @@
 
 const MapInit = {
     /**
-     * Initialize Azure Maps
+     * Initialize Azure Maps.
+     *
+     * @param {string} azureMapsKey - Subscription key fetched from /api/config.
+     *   Required; the map will not render without it.
      */
-    init: function() {
+    init: function(azureMapsKey) {
         const config = GeoFahamConfig.map;
         const state = GeoFahamState;
-        
+
+        if (!azureMapsKey) {
+            throw new Error('MapInit.init called without an Azure Maps key.');
+        }
+
         state.map = new atlas.Map('map', {
             center: config.defaultCenter,
             zoom: config.defaultZoom,
             style: config.defaultStyle,
-            authOptions: config.authOptions,
+            authOptions: {
+                authType: 'subscriptionKey',
+                subscriptionKey: azureMapsKey
+            },
             enableAccessibility: config.enableAccessibility,
             showLogo: config.showLogo,
             showFeedbackLink: config.showFeedbackLink,
