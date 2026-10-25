@@ -2,11 +2,11 @@
 
 ## How to file issues and get help
 
-This project uses GitHub Issues to track bugs and feature requests. Please search the
-existing issues before filing new issues to avoid duplicates. For new issues, file your
-bug or feature request as a new Issue.
+Search existing GitHub issues before opening a bug report, feature request, or
+usage question. For bugs, include the command or request, relevant logs with
+credentials removed, and the expected result.
 
-For help and questions about using this project, please open a GitHub issue.
+Report security vulnerabilities through the process in [SECURITY.md](SECURITY.md).
 
 ## Microsoft Support Policy
 

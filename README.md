@@ -1,180 +1,64 @@
-<p align="center">
-  <h1 align="center">🌍 GeoFaham</h1>
+<h1 align="center">GeoFaham</h1>
   <p align="center">
-    <strong>AI-Powered Geospatial Analysis Platform</strong>
+    <strong>Multi-Agent Geospatial Analysis</strong>
   </p>
-  <p align="center">
-    Multi-agent system combining satellite imagery, OpenStreetMap data, and PostGIS databases
-    <br />
-    for comprehensive geospatial analysis and intelligence.
-  </p>
-</p>
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#api">API</a> •
-  <a href="#documentation">Docs</a>
-</p>
+![GeoFaham burn-severity demo](docs/figures/gifs/geofaham-burn-severity-demo.gif)
 
----
+**[Quick start](#quick-start) · [Demos](docs/DEMO_GALLERY.md) · [Documentation](#documentation)**
 
 ## Overview
 
-GeoFaham is an intelligent geospatial analysis platform that leverages multiple AI agents to automate complex geospatial workflows through natural language. It combines:
+GeoFaham combines PostGIS records, OpenStreetMap features, satellite imagery, and
+raster computation to answer geospatial questions about places, infrastructure,
+and imagery. Its evaluation focuses on disaster-response tasks, including schools
+within flood extents, building damage, and pre- and post-fire imagery.
 
-- **Satellite Imagery** from Microsoft Planetary Computer (Sentinel-2, Landsat, SAR)
-- **OpenStreetMap** features (buildings, roads, infrastructure)
-- **PostGIS Database** for spatial queries and geospatial records
-- **Raster Analysis** with automated Python code generation
+## How it works
 
-The system uses [AutoGen](https://github.com/microsoft/autogen) for multi-agent orchestration, allowing natural language queries to be automatically decomposed into specialized agent tasks.
+Four agents handle spatial queries, map features, imagery search, and raster
+analysis. An Orchestrator maintains a task plan, tracks progress, and revises the
+plan when execution stalls. The Response Store saves outputs as files; later
+steps refer to response IDs and metadata rather than passing full geometries or
+rasters through the model context.
 
-While primarily tested with **disaster response** scenarios (wildfire damage, flood assessment), GeoFaham is designed as a general-purpose geospatial analysis tool applicable to a wide range of domains:
+![Orchestrator, specialist agents, and Response Store](docs/figures/gifs/geofaham-system-overview.gif)
 
-- 🏙️ **Urban Planning** — Land use analysis, zoning studies, building footprint extraction
-- 🏗️ **Infrastructure Analysis** — Road networks, bridges, utility corridors, transport accessibility
-- 🌱 **Climate & Environmental Monitoring** — Vegetation health (NDVI), deforestation tracking, water body changes
-- 👥 **Population Analysis** — Population density mapping, exposure assessments, demographic overlays
-- 🔥 **Disaster Response** — Burn severity mapping, flood extent detection, building damage classification
+[Static diagram](docs/figures/geofaham-system-overview.png) ·
+[Agent reference](docs/AGENTS_DOCUMENTATION.md) ·
+[Response Store](docs/RESPONSE_STORE.md)
 
-## Features
+## Quick start
 
-### 🤖 Multi-Agent System
-- **Orchestrator Agent** - Plans and coordinates complex geospatial workflows
-- **Vector Agent** - PostGIS spatial queries with GeoJSON integration
-- **Maps Agent** - OpenStreetMap feature extraction (14 specialized tools)
-- **STAC Agent** - Satellite imagery search from 100+ collections
-- **Raster Ops Agent** - Python code generation for raster analysis
+### Requirements
 
-### 🗺️ Geospatial Capabilities
-- Satellite imagery search and raster index computation (NDVI, NBR, NDWI, etc.)
-- OpenStreetMap feature extraction (buildings, roads, POIs, land use, and more)
-- Spatial queries against PostGIS databases with GeoJSON integration
-- Population density mapping and exposure analysis
-- Automated Python code generation for custom raster analysis
-- Infrastructure and land use assessment
+- Python 3.11 or later.
+- PostgreSQL and PostGIS; the supplied snapshot requires PostgreSQL 18.
+- API access for your configured models.
+- An Azure Maps subscription key for the web map.
 
-### 🖥️ Interactive Web Interface
-- Real-time chat with AI agents
-- Interactive map visualization (Leaflet.js)
-- Layer management and styling
-- Raster tile streaming (TiTiler)
-- GeoJSON upload and management
-
-## Architecture
-
-```
-GeoFaham/
-├── agents/                    # Multi-agent system
-│   ├── core/                  # Foundation (config, types, logging)
-│   ├── shared/                # Shared utilities (serialization, geojson)
-│   ├── base/                  # Agent factory, model client
-│   ├── vector_agent/          # PostGIS queries
-│   ├── maps_agent/            # OpenStreetMap extraction
-│   ├── stac_agent/            # Satellite imagery (Planetary Computer)
-│   ├── raster_ops_agent/      # Raster analysis code execution
-│   ├── orchestrator_agent/    # Multi-agent coordination
-│   └── team.py                # Team creation
-│
-├── backend/                   # FastAPI server
-│   ├── routes/                # API endpoints
-│   ├── services/              # Business logic (raster, tiles)
-│   └── crud/                  # Database operations
-│
-├── frontend/                  # Web UI
-│   ├── index.html             # Main page
-│   ├── js/                    # JavaScript modules
-│   └── css/                   # Styles
-│
-├── data/                      # Static reference data (version controlled)
-│   ├── stac/                  # STAC band metadata
-│   └── db/                    # Database schemas, SQL
-│
-├── runtime/                   # Generated at runtime (gitignored)
-│   ├── artifacts/             # Generated GeoJSON, COG files
-│   ├── state/                 # Team state, response store
-│   └── history/               # Conversation logs
-│
-├── tests/                     # Test suite
-│   ├── console_test.py        # Interactive agent testing
-│   └── tool_test.py           # Tool-level testing
-│
-├── docs/                      # Documentation
-├── server.py                  # FastAPI entry point
-└── requirements.txt           # Python dependencies
-```
-
-### Agent Communication Flow
-
-```
-User Query
-    │
-    ▼
-┌─────────────────┐
-│   Orchestrator  │ ◄── Plans workflow, delegates tasks
-└────────┬────────┘
-         │
-    ┌────┴────┬─────────┬─────────┐
-    ▼         ▼         ▼         ▼
-┌───────┐ ┌───────┐ ┌───────┐ ┌────────┐
-│Vector │ │ Maps  │ │ STAC  │ │ Raster │
-│Agent  │ │ Agent │ │ Agent │ │  Ops   │
-└───┬───┘ └───┬───┘ └───┬───┘ └───┬────┘
-    │         │         │         │
-    ▼         ▼         ▼         ▼
- PostGIS   OSM APIs  Planetary  Python
-Database   Nominatim  Computer  Executor
-           Overpass   STAC API
-```
-
-## Quick Start
-
-Model clients use `GEOFAHAM_*_MODEL_CLIENT` component settings. See
-[configuration](docs/CONFIGURATION.md) for credentials and per-agent overrides.
-
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL with PostGIS extension
-- API access for your configured models
-- (Optional) Local Nominatim/Overpass for OSM queries
-
-### Installation
+### Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/microsoft/GeoFaham.git
 cd GeoFaham
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Copy and configure environment
 cp .env.example .env
-# Edit .env with your credentials
 ```
 
-### Configuration
+On Windows, activate the environment with `venv\Scripts\activate`.
 
-Edit `.env` with your settings:
+### Configure
 
-```bash
-# Models (OpenAI example; see configuration for Azure and other providers)
+Edit `.env` with your credentials and database connection:
+
+```dotenv
 OPENAI_API_KEY=your_api_key
+AZURE_MAPS_KEY=your_maps_key
 GEOFAHAM_DEFAULT_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.OpenAIChatCompletionClient","config":{"model":"gpt-4o","api_key":"$OPENAI_API_KEY"}}'
 GEOFAHAM_REASONING_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.OpenAIChatCompletionClient","config":{"model":"gpt-5.1","api_key":"$OPENAI_API_KEY","reasoning_effort":"medium"}}'
-
-# Azure Maps (loaded by the frontend through /api/config)
-AZURE_MAPS_KEY=your_maps_key
-
-# PostgreSQL (required for vector_agent)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=geofaham
@@ -182,200 +66,65 @@ POSTGRES_USER=your_user
 POSTGRES_PASSWORD=your_password
 ```
 
-### Database setup
+Azure OpenAI, custom endpoints, per-agent models, and path overrides are covered
+in [configuration](docs/CONFIGURATION.md). The frontend loads `AZURE_MAPS_KEY`
+from the server's `/api/config` endpoint.
 
-For a supplied GeoFaham snapshot, follow [database setup](data/backups/README.md)
-to verify the archive and restore it into a new PostgreSQL database. The loader
-refuses an existing database. Set `POSTGRES_DB` to the restored database name.
+### Load the disaster data
 
-### Running the Server
+Place your copy of `geofaham_data_v1.sql.gz` in `data/backups/`, then follow
+[database setup](data/backups/README.md) to verify and restore them:
 
 ```bash
-# Start the server
+python3 scripts/db_init.py --dry-run
+python3 scripts/db_init.py
+```
+
+The loader creates the configured database and refuses an existing one. The
+snapshot includes the schema and data. The Vector Agent and full team require a
+populated database; Maps, STAC, and Raster can also run individually through
+the [Python API](docs/API.md#python).
+
+### Run
+
+```bash
 python server.py
-
-# Or with uvicorn for development
-uvicorn server:app --reload --host 0.0.0.0 --port 8010
 ```
 
-Before accepting requests, the server checks model-client configuration, PostGIS,
-required tables, metadata files, and writable runtime paths. These checks do not
-send model prompts. See [startup checks](docs/CONFIGURATION.md#startup-checks).
+Before accepting requests, startup checks validate model-client configuration,
+PostGIS, required tables, metadata files, and writable runtime paths. See
+[startup checks](docs/CONFIGURATION.md#startup-checks).
 
-Visit `http://localhost:8010` to access the web interface.
-
-## Usage
-
-### Web Interface
-
-1. Open `http://localhost:8010` in your browser
-2. Type your query in the chat input, e.g.:
-   - "Show me all schools and hospitals in downtown Seattle"
-   - "Calculate NDVI for agricultural areas around Sacramento in July 2024"
-   - "Find all bridges and major roads within 10km of the river"
-   - "What is the population density in the coastal zones of Miami?"
-   - "Assess burn severity for the 2023 Maui wildfire area"
-3. Watch the agents collaborate to answer your query
-4. View results on the interactive map
-
-### Command Line Testing
+Open `http://localhost:8010`. For development:
 
 ```bash
-# Interactive agent console
-python -m tests.console_test
-
-# Test specific agent
-python -m tests.console_test --agent vector
-python -m tests.console_test --agent maps
-python -m tests.console_test --agent stac
-python -m tests.console_test --agent raster
-python -m tests.console_test --agent team
-
-# Single query mode
-python -m tests.console_test --agent maps --query "Get boundary for Seattle, Washington"
-
-# Test individual tools
-python -m tests.tool_test --agent maps --list
-python -m tests.tool_test --agent maps --tool get_address_coordinates
+uvicorn server:app --reload --host 127.0.0.1 --port 8010
 ```
 
-### Python API
+## Demos
 
-```python
-import asyncio
+The [demo gallery](docs/DEMO_GALLERY.md) contains flood-and-schools, building
+damage, imagery timeline, and burn-severity examples. Recordings are edited to
+skip waiting and processing time.
 
-from dotenv import load_dotenv
-from autogen_agentchat.ui import Console
+[![Flood-analysis conversation and map outputs](docs/figures/geofaham-web-interface.png)](docs/figures/geofaham-web-interface.png)
 
-
-async def main():
-    load_dotenv()
-    from agents import get_team
-
-    async def user_input(prompt, cancellation_token=None):
-        return await asyncio.to_thread(input, prompt)
-
-    team = await get_team(user_input)
-    await Console(team.run_stream(task="Find bridges in St. Louis, Missouri."))
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-## API Reference
-
-### REST Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/ws/chat` | WebSocket | Real-time chat with agents |
-| `/api/disasters` | GET | List disasters in database |
-| `/api/upload-geojson` | POST | Upload GeoJSON file |
-| `/api/user-artifacts` | GET | List user artifacts |
-| `/api/raster/info` | GET | Get raster metadata |
-| `/tiles/{z}/{x}/{y}` | GET | Raster tile endpoint (TiTiler) |
-| `/history` | GET | Conversation history |
-
-### Agent Tools
-
-#### Vector Agent
-- `execute_query` - Run PostGIS SELECT queries
-- `execute_query_with_geojson` - Query with GeoJSON spatial joins
-- `get_available_responses` - Access previous agent responses
-
-#### Maps Agent
-- `get_roads`, `get_buildings`, `get_waterways`, `get_bridges`
-- `get_pois`, `get_landuse`, `get_natural_features`, `get_infrastructure`
-- `get_admin_boundary`, `get_neighborhoods`
-- `get_address_coordinates`, `get_place_bounding_box`
-- `search_feature_by_name`, `get_features_by_tags`
-
-#### STAC Agent
-- `get_collection_details` - Get satellite collection metadata
-- `execute_stac_search` - Search satellite imagery (fetch/show modes)
-
-#### Raster Ops Agent
-- `execute_custom_raster_code` - Execute Python raster analysis
+Click the figure for the full-size view. See [web interface](docs/UI_DOCUMENTATION.md)
+for controls and rendering details.
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [docs/TOOL_RESPONSE_SCHEMAS.md](docs/TOOL_RESPONSE_SCHEMAS.md) | JSON schemas for all tool responses |
-| [docs/DATA_DIRECTORY_STRUCTURE.md](docs/DATA_DIRECTORY_STRUCTURE.md) | File organization best practices |
-| [docs/agents.md](docs/agents.md) | Agent architecture overview |
-
-## Configuration Reference
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `AZURE_MAPS_KEY` | ✅ for map | - | Azure Maps subscription key |
-| `POSTGRES_HOST` | ✅ | localhost | PostgreSQL host |
-| `POSTGRES_DB` | ✅ | geofaham | Database name |
-| `POSTGRES_USER` | ✅ | - | Database user |
-| `POSTGRES_PASSWORD` | ✅ | - | Database password |
-| `GEOFAHAM_DEFAULT_MODEL_CLIENT` | ✅ unless overridden | - | Model-client component for Maps and STAC |
-| `GEOFAHAM_REASONING_MODEL_CLIENT` | ✅ unless overridden | - | Model-client component for Vector, Raster, and Orchestrator |
-| `GEOFAHAM_BASE_DIR` | ❌ | ./runtime | Runtime artifacts directory |
-| `GEOFAHAM_DATA_DIR` | ❌ | ./data | Static data directory |
-
-### Model Configuration
-
-Per-agent overrides use complete component configurations. See
-[configuration](docs/CONFIGURATION.md#role-overrides) for role names, Azure
-settings, and other providers.
-
-## Development
-
-### Adding a New Agent
-
-1. Create folder: `agents/new_agent/`
-2. Add files:
-   - `assistant.py` - Agent factory function
-   - `tools.py` - Tool implementations
-   - `_prompts.py` - System prompt
-   - `__init__.py` - Package exports
-3. Register in `agents/team.py`
-4. Update `agents/orchestrator_agent/_agent_capabilities.py`
-5. Add constants to `agents/core/constants.py`
-
-### Code Style
-
-- Follow existing patterns in `agents/core/` and `agents/base/`
-- All tools return `GeoFahamToolResponse` as JSON string
-- Use `get_config()` for all configuration access
-- Log using `get_logger("module.name")`
-
-### Testing
-
-```bash
-# Run unit tests
-python -m pytest tests/
-
-# Test specific agent
-python -m tests.test_vector_agent
-python -m tests.test_maps_agent
-
-# Interactive testing
-python -m tests.console_test --agent vector
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| AI Agents | [AutoGen](https://github.com/microsoft/autogen) 0.7+ |
-| LLM | Azure OpenAI (GPT-4o, GPT-5) |
-| Backend | FastAPI, Uvicorn |
-| Database | PostgreSQL + PostGIS |
-| Geospatial | GeoPandas, Rasterio, Shapely |
-| Satellite Data | PySTAC, Planetary Computer, stackstac |
-| Raster Tiles | TiTiler, rio-tiler |
-| OSM | OSMnx, Nominatim, Overpass |
-| Frontend | Vanilla JS, Leaflet.js |
+| Topic | Reference |
+|-------|-----------|
+| Agents and orchestration | [Agent reference](docs/AGENTS_DOCUMENTATION.md) |
+| Model clients and environment variables | [Configuration](docs/CONFIGURATION.md) |
+| Database restore | [Database setup](data/backups/README.md) |
+| Files and state | [Data directories](docs/DATA_DIRECTORY_STRUCTURE.md) |
+| Artifact storage and SQL placeholders | [Response Store](docs/RESPONSE_STORE.md) |
+| Raster code execution | [Raster Agent](docs/RASTER_CODE_GENERATION.md) |
+| Response fields | [Tool response schemas](docs/TOOL_RESPONSE_SCHEMAS.md) |
+| Python, HTTP, and tools | [API reference](docs/API.md) |
+| Contributing and tests | [Development](docs/DEVELOPMENT.md) |
 
 ## License
 
