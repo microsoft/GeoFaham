@@ -1,0 +1,27 @@
+{
+  "filename": "geofaham_data_v1.sql.gz",
+  "size_bytes": 229961534,
+  "sha256": "7f48adaa54416d5f0fa42cedd3de301435bc7d1159177de5402aeee11d20cfea",
+  "format": "gzip-compressed PostgreSQL plain SQL",
+  "pg_dump_version": "pg_dump (PostgreSQL) 18.3 (Postgres.app)",
+  "tables": {
+    "public.building_damage_assessment": {
+      "rows": 2600346,
+      "copy_data_sha256": "06e309b305c3d0b5f306eefc7ec8f86594dd3eb795a308e3cce5a0662fe7bbc5"
+    },
+    "public.disasters": {
+      "rows": 17,
+      "copy_data_sha256": "e22f5bef7280f7855677fd1b83dbcf07a6243a2d719afe3857a8b12e68b078a9"
+    },
+    "public.flood_maps": {
+      "rows": 214648,
+      "copy_data_sha256": "27b42fff8eed076120d199fafb1b08f10ca10c6faf5b560b21b11d1b0bef7f36"
+    },
+    "public.spatial_ref_sys": {
+      "rows": 0,
+      "copy_data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "validation": "Full gzip read; no internal database name, database control commands, DROP statements, object ownership assignments, or GRANT/REVOKE statements found.",
+  "exported_at_utc": "2026-10-17T11:16:25.715911+00:00"
+}
