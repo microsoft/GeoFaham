@@ -4,7 +4,7 @@
 """Application routes retained when integrating agent workflows."""
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
@@ -17,7 +17,8 @@ import server
 
 class ApplicationRouteTests(unittest.TestCase):
     def test_frontend_configuration_keeps_the_deployment_maps_key(self):
-        with patch.dict("os.environ", {"AZURE_MAPS_KEY": "test-maps-key"}):
+        with patch.dict("os.environ", {"AZURE_MAPS_KEY": "test-maps-key"}), \
+                patch.object(server, "check_startup", new_callable=AsyncMock):
             with TestClient(server.app) as client:
                 response = client.get("/api/config")
                 self.assertEqual(response.status_code, 200)

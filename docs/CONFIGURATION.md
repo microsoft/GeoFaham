@@ -96,3 +96,14 @@ network limited to the imagery hosts (for Planetary Computer,
 Scripts calling the Raster tool must use Python's `if __name__ == "__main__":`
 entry-point guard, as required by spawned multiprocessing. The application entry
 point already uses this guard.
+
+## Startup checks
+
+FastAPI checks all six model-client configurations, metadata files, runtime
+paths, PostGIS, and SELECT access to `disasters`, `building_damage_assessment`,
+and `flood_maps` before accepting requests. A failed check stops startup with
+an error identifying the dependency.
+
+Model clients are initialized and closed without sending prompts. These checks
+do not verify API authentication, external imagery services, or complete agent
+workflows. Database probes are read-only and do not validate every table record.

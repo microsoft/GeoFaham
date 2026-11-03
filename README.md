@@ -182,6 +182,12 @@ POSTGRES_USER=your_user
 POSTGRES_PASSWORD=your_password
 ```
 
+### Database setup
+
+For a supplied GeoFaham snapshot, follow [database setup](data/backups/README.md)
+to verify the archive and restore it into a new PostgreSQL database. The loader
+refuses an existing database. Set `POSTGRES_DB` to the restored database name.
+
 ### Running the Server
 
 ```bash
@@ -189,16 +195,20 @@ POSTGRES_PASSWORD=your_password
 python server.py
 
 # Or with uvicorn for development
-uvicorn server:app --reload --host 0.0.0.0 --port 8005
+uvicorn server:app --reload --host 0.0.0.0 --port 8010
 ```
 
-Visit `http://localhost:8005` to access the web interface.
+Before accepting requests, the server checks model-client configuration, PostGIS,
+required tables, metadata files, and writable runtime paths. These checks do not
+send model prompts. See [startup checks](docs/CONFIGURATION.md#startup-checks).
+
+Visit `http://localhost:8010` to access the web interface.
 
 ## Usage
 
 ### Web Interface
 
-1. Open `http://localhost:8005` in your browser
+1. Open `http://localhost:8010` in your browser
 2. Type your query in the chat input, e.g.:
    - "Show me all schools and hospitals in downtown Seattle"
    - "Calculate NDVI for agricultural areas around Sacramento in July 2024"
