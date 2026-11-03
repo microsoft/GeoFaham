@@ -39,6 +39,12 @@ For Azure OpenAI:
 GEOFAHAM_DEFAULT_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.AzureOpenAIChatCompletionClient","config":{"model":"gpt-4o","azure_deployment":"gpt-4o","azure_endpoint":"https://your-resource.openai.azure.com/","api_version":"2024-08-01-preview","api_key":"$AZURE_OPENAI_KEY"}}'
 ```
 
+For Azure OpenAI with Microsoft Entra ID (keyless, via `DefaultAzureCredential`, e.g. after `az login`):
+
+```bash
+GEOFAHAM_DEFAULT_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.AzureOpenAIChatCompletionClient","config":{"model":"gpt-4o","azure_deployment":"gpt-4o","azure_endpoint":"https://your-resource.openai.azure.com/","api_version":"2024-08-01-preview","azure_ad_token_provider":{"provider":"autogen_ext.auth.azure.AzureTokenProvider","config":{"provider_kind":"DefaultAzureCredential","scopes":["https://cognitiveservices.azure.com/.default"]}}}}'
+```
+
 Model selection is implemented in [config.py](../agents/core/config.py) and [client.py](../agents/base/client.py).
 
 ## Role overrides
@@ -64,9 +70,13 @@ dependencies. See [data directories](DATA_DIRECTORY_STRUCTURE.md) for path setti
 
 ## Execution limits
 
-`GEOFAHAM_SQL_TIMEOUT_SECONDS` defaults to 60. Vector tool queries run in read-only
-transactions with PostgreSQL `statement_timeout`; cancellation waits for the query
-to stop before its connection is reused.
+`GEOFAHAM_SQL_TIMEOUT_SECONDS` defaults to 60. Vector tool queries must be a single
+`SELECT`/`WITH` statement and run in read-only transactions with PostgreSQL
+`statement_timeout`; cancellation waits for the query to stop before its connection
+is reused. These checks are not a substitute for database permissions: set
+`POSTGRES_USER` to a non-superuser role with only `SELECT` on the GeoFaham tables
+(for example with `ALTER ROLE ... SET default_transaction_read_only = on`), not the
+role used to restore the snapshot.
 
 `GEOFAHAM_RASTER_TIMEOUT_SECONDS` defaults to 300. Each Raster tool call runs in a
 separate spawned process, including export. Timeout or chat cancellation stops and

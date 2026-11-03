@@ -59,7 +59,6 @@ from agents.orchestrator_agent._prompts import (
 from ._prompt_progress import ORCHESTRATOR_PROGRESS_LEDGER_PROMPT, LedgerEntry
 from pydantic import BaseModel, Field
 from agents.core.types import GeoFahamToolResponse
-from agents.core.constants import AGENT_NAMES
 from agents.core.response_store import get_response_store
 from agents.shared.responses import validate_response_artifacts
 from agents.core.config import get_config

@@ -19,7 +19,7 @@ from agents.core.config import AgentsConfig, ConfigProvider, QueryConfig
 from agents.core.response_store import ResponseStore, ResponseStoreProvider
 from agents.core.types import GeoFahamToolResponse
 from agents.orchestrator_agent.orchestrator import GeoFahamOrchestrator
-from agents.vector_agent.tools import VectorQueryExecutor
+from agents.vector_agent.tools import VectorQueryExecutor, _is_safe_query
 from agents.shared.responses import validate_response_artifacts
 from backend.routes import raster, websocket
 from tests.test_workflow_contracts import ledger, manager
@@ -77,6 +77,30 @@ class RasterUploadTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(registered.artifact.path, prepared['content'])
                 with rasterio.open(registered.artifact.path) as ds:
                     self.assertEqual(ds.read(1,masked=True).count(), 3)
+
+
+class SqlSafetyTests(unittest.TestCase):
+    def test_single_read_queries_are_allowed(self):
+        for query in (
+            "SELECT 1;",
+            "-- note\nWITH a AS (SELECT 1) SELECT * FROM a",
+            "WITH {{GEOJSON_POLYGONS_CTE}} SELECT name FROM polygons_from_geojson",
+            "SELECT name FROM disasters WHERE name = 'Do; COPY x'",
+            "SELECT ST_ClusterDBSCAN(geom, 50, 2) OVER () AS cluster FROM flood_maps",
+        ):
+            self.assertTrue(_is_safe_query(query), query)
+
+    def test_statements_that_escape_read_only_execution_are_rejected(self):
+        for query in (
+            "COMMIT; SELECT 1",
+            "SELECT 1 /* ; */ ; COMMIT",
+            "SET TRANSACTION READ WRITE",
+            "DO $$BEGIN EXECUTE 'DR'||'OP TABLE disasters'; END$$",
+            "COPY (SELECT 1) TO PROGRAM 'id'",
+            "SELECT pg_read_file('/etc/passwd')",
+            "SELECT * FROM dblink('host=x', 'SELECT 1') AS t(a int)",
+        ):
+            self.assertFalse(_is_safe_query(query), query)
 
 
 class SqlCancellationTests(unittest.IsolatedAsyncioTestCase):

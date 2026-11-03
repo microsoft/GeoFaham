@@ -497,16 +497,43 @@ def _strip_sql_comments(query: str) -> str:
     return result
 
 
+# Comments, string literals and quoted identifiers, masked before structural checks
+_SQL_NON_CODE = re.compile(
+    r"--[^\n]*"
+    r"|/\*.*?\*/"
+    r"|\$(?P<tag>[A-Za-z_]\w*)?\$.*?\$(?P=tag)\$"
+    r"|(?<!\w)[Ee]'(?:[^'\\]|\\.|'')*'"
+    r"|'(?:[^']|'')*'"
+    r'|"(?:[^"]|"")*"',
+    re.DOTALL,
+)
+_READ_STATEMENT_START = re.compile(r"^[\s(]*(SELECT|WITH|VALUES|TABLE)\b", re.IGNORECASE)
+# Functions that reach the server filesystem, other connections, settings, or run SQL strings
+_FORBIDDEN_FUNCTIONS = re.compile(
+    r"\b(pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|pg_file_\w+|lo_\w+|dblink\w*"
+    r"|query_to_xml\w*|ts_stat|set_config|pg_terminate_backend|pg_cancel_backend"
+    r"|pg_reload_conf|pg_sleep\w*)\s*\(",
+    re.IGNORECASE,
+)
+
+
 def _is_safe_query(query: str) -> bool:
     """
-    Check if query is read-only (SELECT only).
+    Check that query is a single read-only SELECT/WITH statement.
     
     Uses word-boundary matching and strips comments to avoid false positives
-    from words like 'create' in comments or 'alter' in data values.
+    from words like 'create' in comments or 'alter' in data values. A single
+    statement is required so transaction control (e.g. COMMIT) cannot end the
+    read-only transaction used by the executor.
     """
     # Strip comments first - they may contain words like "create", "update"
     query_no_comments = _strip_sql_comments(query)
-    return _FORBIDDEN_PATTERN.search(query_no_comments) is None
+    if _FORBIDDEN_PATTERN.search(query_no_comments):
+        return False
+    code = _SQL_NON_CODE.sub(" ", query)
+    if re.search(r";\s*\S", code) or not _READ_STATEMENT_START.match(code):
+        return False
+    return _FORBIDDEN_FUNCTIONS.search(code) is None
 
 
 # =============================================================================
