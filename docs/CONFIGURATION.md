@@ -15,6 +15,7 @@
 | `POSTGRES_PASSWORD` | Yes | - | Database password |
 | `GEOFAHAM_BASE_DIR` | No | ./runtime | Runtime artifacts directory |
 | `GEOFAHAM_DATA_DIR` | No | ./data | Static data directory |
+| `GEOFAHAM_ALLOWED_ORIGINS` | No | - | Comma-separated extra browser origins (e.g. `https://maps.example.com`) allowed to use `/ws/chat`, uploads and reset; same-origin requests are always allowed |
 
 ## Model clients
 
@@ -80,8 +81,17 @@ role used to restore the snapshot.
 
 `GEOFAHAM_RASTER_TIMEOUT_SECONDS` defaults to 300. Each Raster tool call runs in a
 separate spawned process, including export. Timeout or chat cancellation stops and
-joins the process. Both settings must be positive integers. Memory, filesystem,
-and network access are not isolated.
+joins the process. Both settings must be positive integers.
+
+The raster process drops credentials and model configs from its environment and
+config. While generated code runs, a Python audit hook blocks file access outside
+`GEOFAHAM_BASE_DIR`, `GEOFAHAM_DATA_DIR`, the temp directory and installed
+libraries, as well as outbound Python sockets, subprocesses and `ctypes`. Native
+GDAL I/O (used by rasterio, pyogrio and stackstac) is not covered, and memory is not
+limited. Deployments that accept untrusted prompts should also run GeoFaham in a
+container or as a user that cannot read `.env` or other secrets, with outbound
+network limited to the imagery hosts (for Planetary Computer,
+`planetarycomputer.microsoft.com` and `*.blob.core.windows.net`).
 
 Scripts calling the Raster tool must use Python's `if __name__ == "__main__":`
 entry-point guard, as required by spawned multiprocessing. The application entry

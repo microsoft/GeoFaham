@@ -31,6 +31,8 @@ from pystac import ItemCollection
 import planetary_computer
 from dask.distributed import Client, LocalCluster
 
+from agents.raster_ops_agent.sandbox import guarded
+
 
 class CodeExecutionError(Exception):
     """Raised when code execution fails."""
@@ -48,7 +50,8 @@ class RasterCodeExecutor:
     def __init__(self, temporal_mode: str = "unspecified"):
         """Initialize the interpreter and track imagery provenance."""
         self.aeval = Interpreter()
-        # shortcut: libraries retain host I/O access; isolate execution before accepting untrusted code.
+        # The worker process adds a Python-level I/O guard (see sandbox.py); native GDAL
+        # access is not covered, so isolate the worker before accepting untrusted prompts.
         self.temporal_mode = temporal_mode
         self.source_scene_ids = set()
         self.acquisition_dates = set()
@@ -140,9 +143,12 @@ class RasterCodeExecutor:
             cache_dir = os.path.join(tempfile.gettempdir(), "dask_cache")
             os.makedirs(cache_dir, exist_ok=True)
             
-            with LocalCluster(local_directory=cache_dir, processes=False) as cluster, Client(cluster) as client:
+            # Keep dask's HTTP servers on loopback; the defaults listen on all interfaces.
+            with LocalCluster(local_directory=cache_dir, processes=False,
+                              dashboard_address="127.0.0.1:0",
+                              worker_dashboard_address="127.0.0.1:0") as cluster, Client(cluster) as client:
                 # Suppress common non-critical warnings during execution
-                with warnings.catch_warnings():
+                with guarded(), warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message="Sending large graph", category=UserWarning)
                     warnings.filterwarnings("ignore", message="All-NaN slice", category=RuntimeWarning)
                     warnings.filterwarnings("ignore", message="invalid value encountered", category=RuntimeWarning)

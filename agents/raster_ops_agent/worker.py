@@ -4,6 +4,7 @@ import multiprocessing
 
 from agents.core.config import ConfigProvider, get_config
 from agents.core.constants import AGENT_NAMES
+from agents.raster_ops_agent.sandbox import strip_secrets
 from agents.shared.responses import build_error_response
 
 
@@ -12,7 +13,10 @@ def _run_raster(send, arguments, config):
         with ConfigProvider.override(config):
             from agents.raster_ops_agent import io_utils
             from agents.raster_ops_agent.tools import _execute_custom_raster_code
+            from agents.raster_ops_agent.sandbox import install_io_guard, scrub_environment
             io_utils.QUERY_JSONS_PATH = str(config.paths.export_dir)
+            scrub_environment()
+            install_io_guard(config.paths.base_dir, config.paths.data_dir)
             send.send(asyncio.run(_execute_custom_raster_code(**arguments)))
     except Exception as error:
         send.send(build_error_response(source=AGENT_NAMES["RASTER_AGENT"],
@@ -22,7 +26,7 @@ def _run_raster(send, arguments, config):
 
 
 async def execute_raster_in_process(arguments):
-    config = get_config()
+    config = strip_secrets(get_config())
     timeout = config.query.raster_timeout_seconds
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)

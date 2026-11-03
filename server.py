@@ -34,6 +34,7 @@ from backend.routes import (
     frontend_config_router
 )
 from backend.services.raster_service import titiler_app
+from backend.services.origin_policy import OriginCheckMiddleware, allowed_origins
 
 # Configure app-level logging
 logging.basicConfig(
@@ -49,10 +50,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+# Browsers may only call state-changing APIs and /ws/chat from the same origin
+# or from origins listed in GEOFAHAM_ALLOWED_ORIGINS.
+app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

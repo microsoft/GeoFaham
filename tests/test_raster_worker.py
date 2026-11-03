@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy
 import rasterio
 
 from agents.core.config import AgentsConfig, ConfigProvider
@@ -69,6 +70,21 @@ class RasterWorkerTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(asyncio.CancelledError):
                         await asyncio.wait_for(task, 4)
                 self.assertEqual({p.pid for p in multiprocessing.active_children()}, before)
+
+    async def test_generated_code_cannot_read_project_files_or_load_native_code(self):
+        readme = Path(__file__).resolve().parents[1] / 'README.md'
+        native = next(Path(numpy.__file__).parent.rglob('*.so'))
+        with tempfile.TemporaryDirectory() as folder:
+            config = AgentsConfig(); config.paths.base_dir = Path(folder)
+            with ConfigProvider.override(config):
+                for code in (
+                    f"result = {{'n': int(np.fromfile({str(readme)!r}, dtype='uint8').size)}}",
+                    f"result = {{'n': int(np.ctypeslib.load_library({native.name!r}, {str(native.parent)!r}) is None)}}",
+                ):
+                    response = GeoFahamToolResponse.model_validate_json(await execute_custom_raster_code(
+                        code, 'blocked', False, 'statistics'))
+                    self.assertEqual(response.type, 'error', code)
+                    self.assertIn('Raster sandbox blocked', response.error_message)
 
 
 if __name__ == '__main__':
