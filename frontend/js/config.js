@@ -23,7 +23,6 @@ const GeoFahamConfig = {
         resetUrl: '/api/reset',
         uploadUrl: '/api/upload-geojson',
         analyzeRasterUrl: '/api/analyze-raster',
-        saveBenchmarkUrl: '/api/save-benchmark-gt',
         colormapsUrl: '/titiler_colormaps.json'
     },
 

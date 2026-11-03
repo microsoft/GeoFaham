@@ -28,12 +28,13 @@ from backend.routes import (
     history_router,
     geojson_router,
     raster_router,
-    benchmark_router,
+    reset_router,
     websocket_router,
     polling_router,
     frontend_config_router
 )
 from backend.services.raster_service import titiler_app
+from backend.services.origin_policy import OriginCheckMiddleware, allowed_origins
 
 # Configure app-level logging
 logging.basicConfig(
@@ -49,10 +50,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+# Browsers may only call state-changing APIs and /ws/chat from the same origin
+# or from origins listed in GEOFAHAM_ALLOWED_ORIGINS.
+app.add_middleware(OriginCheckMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,7 +73,7 @@ app.include_router(static_router)           # /, /crud, colormaps, mosaic
 app.include_router(history_router)          # /history
 app.include_router(geojson_router)          # /api/upload-geojson, /api/user-artifacts
 app.include_router(raster_router)           # /api/raster/*, /api/upload-raster
-app.include_router(benchmark_router)        # /api/reset, /api/save-benchmark-gt
+app.include_router(reset_router)        # /api/reset
 app.include_router(polling_router)           # /api/polling/* - HTTP fallback
 app.include_router(frontend_config_router)   # /api/config - per-deployment frontend settings
 app.include_router(crud_router, prefix="/api")  # /api/disasters, /api/building_damage, etc.

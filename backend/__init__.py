@@ -9,7 +9,7 @@ from backend.routes import (
     history_router,
     geojson_router,
     raster_router,
-    benchmark_router,
+    reset_router,
     websocket_router
 )
 from backend.crud.routes import router as crud_router
@@ -19,7 +19,7 @@ __all__ = [
     'history_router',
     'geojson_router', 
     'raster_router',
-    'benchmark_router',
+    'reset_router',
     'websocket_router',
     'crud_router'
 ]

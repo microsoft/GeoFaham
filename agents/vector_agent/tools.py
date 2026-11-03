@@ -12,6 +12,8 @@ import json
 import os
 import re
 import datetime
+import asyncio
+import threading
 from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -74,6 +76,7 @@ def _create_connection_pool() -> pool.SimpleConnectionPool:
         host=config.database.host,
         port=config.database.port,
         database=config.database.database,
+        connect_timeout=10,
     )
 
 
@@ -494,16 +497,43 @@ def _strip_sql_comments(query: str) -> str:
     return result
 
 
+# Comments, string literals and quoted identifiers, masked before structural checks
+_SQL_NON_CODE = re.compile(
+    r"--[^\n]*"
+    r"|/\*.*?\*/"
+    r"|\$(?P<tag>[A-Za-z_]\w*)?\$.*?\$(?P=tag)\$"
+    r"|(?<!\w)[Ee]'(?:[^'\\]|\\.|'')*'"
+    r"|'(?:[^']|'')*'"
+    r'|"(?:[^"]|"")*"',
+    re.DOTALL,
+)
+_READ_STATEMENT_START = re.compile(r"^[\s(]*(SELECT|WITH|VALUES|TABLE)\b", re.IGNORECASE)
+# Functions that reach the server filesystem, other connections, settings, or run SQL strings
+_FORBIDDEN_FUNCTIONS = re.compile(
+    r"\b(pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|pg_file_\w+|lo_\w+|dblink\w*"
+    r"|query_to_xml\w*|ts_stat|set_config|pg_terminate_backend|pg_cancel_backend"
+    r"|pg_reload_conf|pg_sleep\w*)\s*\(",
+    re.IGNORECASE,
+)
+
+
 def _is_safe_query(query: str) -> bool:
     """
-    Check if query is read-only (SELECT only).
+    Check that query is a single read-only SELECT/WITH statement.
     
     Uses word-boundary matching and strips comments to avoid false positives
-    from words like 'create' in comments or 'alter' in data values.
+    from words like 'create' in comments or 'alter' in data values. A single
+    statement is required so transaction control (e.g. COMMIT) cannot end the
+    read-only transaction used by the executor.
     """
     # Strip comments first - they may contain words like "create", "update"
     query_no_comments = _strip_sql_comments(query)
-    return _FORBIDDEN_PATTERN.search(query_no_comments) is None
+    if _FORBIDDEN_PATTERN.search(query_no_comments):
+        return False
+    code = _SQL_NON_CODE.sub(" ", query)
+    if re.search(r";\s*\S", code) or not _READ_STATEMENT_START.match(code):
+        return False
+    return _FORBIDDEN_FUNCTIONS.search(code) is None
 
 
 # =============================================================================
@@ -527,6 +557,7 @@ class VectorQueryExecutor:
     def __init__(self):
         self._pool = _create_connection_pool()
         self._conn = None
+        self._query_lock = asyncio.Lock()
     
     @contextmanager
     def _get_connection(self):
@@ -671,6 +702,18 @@ class VectorQueryExecutor:
         results_description: str,
         return_aggregated_data: bool = False,
     ) -> str:
+        # A tool retry/parallel call must not reuse a still-running connection.
+        async with self._query_lock:
+            return await self._execute_query_locked(
+                query, return_layer, results_description, return_aggregated_data)
+
+    async def _execute_query_locked(
+        self,
+        query: str,
+        return_layer: bool,
+        results_description: str,
+        return_aggregated_data: bool = False,
+    ) -> str:
         """
         Internal query execution - assumes safety already verified.
         
@@ -678,12 +721,34 @@ class VectorQueryExecutor:
         """
         response_id = generate_response_id()
         conn = self._get_or_create_connection()
-        
-        # Execute query
-        try:
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cancelled = threading.Event()
+
+        def run_query():
+            # End the read transaction before returning this connection for reuse.
+            conn.rollback()
+            with conn, conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute("SET LOCAL statement_timeout = %s",
+                            (get_config().query.sql_timeout_seconds * 1000,))
+                if cancelled.is_set():
+                    return []
                 cur.execute(query)
-                rows = [dict(r) for r in cur.fetchall()]
+                return [dict(r) for r in cur.fetchall()]
+
+        worker = asyncio.create_task(asyncio.to_thread(run_query))
+        try:
+            rows = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            # Wait for cancellation to finish before this connection can be reused.
+            while not worker.done():
+                await asyncio.to_thread(conn.cancel)
+                await asyncio.wait({worker}, timeout=0.05)
+            try:
+                worker.result()
+            except Exception:
+                pass
+            raise
         except psycopg2.Error as e:
             conn.rollback()
             logger.error(f"Database error: {e}", extra={"query": query[:200]})
@@ -852,7 +917,12 @@ class VectorQueryExecutor:
                 # Build feature from geometry column
                 geom = row.get(geom_col) if geom_col else row.get("geom") or row.get("geometry")
                 if geom is None:
-                    continue
+                    return self._error_response(
+                        response_id,
+                        "Layer query contains a row without geometry. Filter missing geometries "
+                        "out of the feature layer and return summary totals in separate queries; "
+                        "use return_layer=False for totals with explicit unit names such as total_length_km.",
+                    )
                 
                 # Validate geometry format and size
                 try:
@@ -899,6 +969,7 @@ class VectorQueryExecutor:
                 stats=artifact.stats,
                 property_keys=artifact.property_keys,
                 geom_types=artifact.geom_types,
+                artifact_metadata=artifact.metadata,
                 data=truncated_rows,
             )
         else:
@@ -911,6 +982,7 @@ class VectorQueryExecutor:
                 stats=artifact.stats,
                 property_keys=artifact.property_keys,
                 geom_types=artifact.geom_types,
+                artifact_metadata=artifact.metadata,
             )
     
     def _build_data_response(
@@ -1051,6 +1123,7 @@ class VectorQueryExecutor:
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
     
     def _convert_to_meters(self, distance: float, unit: str) -> float:

@@ -50,8 +50,10 @@ Produce the fact sheet using the exact headings below. Use short bullet points. 
 
 ### 1. QUERY INTENT
 
-**Task Type:** `visualization` | `statistics`
-- Use `statistics` only if the user explicitly requests counts/percentages/tables; otherwise `visualization`.
+**Task Type:** `visualization` | `statistics` | `both` | `Not specified`
+- Counts, measurements, percentages, numbers and tables imply `statistics`.
+- Map/layer requests imply `visualization`; use `both` when both are requested.
+- Preserve explicit output restrictions such as "numbers only" or "no map".
 
 **User Goal:**
 - [1 short sentence describing what the user wants to understand or see]
@@ -59,7 +61,7 @@ Produce the fact sheet using the exact headings below. Use short bullet points. 
 **Requested Output (if stated):**
 - [layer | table | comparison | timeline | Not specified]
 
-Note: By default, assume `visualization` and expect a layer output unless user explicitly stated otherwise. Even if the user says "show me numbers" default is visualization unless explicitly stated otherwise.
+If the output is unspecified, write "Not specified"; planning may choose an output suitable for the task without overriding explicit user intent.
 
 ---
 
@@ -112,9 +114,25 @@ Note: By default, assume `visualization` and expect a layer output unless user e
 **User-Provided Data (already saved):**
 - [uploads/drawings with file paths; or "None"]
 
-**Missing Information / Clarifications (only if plan would fail):**
+**Missing Information / Required Clarifications:**
 - [questions that must be answered; or "None"]
+- Ask when required information is missing or user constraints conflict. Do not
+  drop or reinterpret a requirement merely to make a plan executable.
 """
+
+FACTS_RESPONSE_CONTRACT = """
+Return one JSON object with exactly two keys:
+- facts: a string containing the fact sheet with its requested headings.
+- clarification_question: the essential question the user must answer before work
+  can proceed, or an empty string when no required clarification remains.
+Preserve explicit user constraints. Conflicting requirements must be clarified,
+not silently resolved by selecting one of them. Clear an earlier question only
+when the conversation provides its answer or the user explicitly changes the task.
+Do not ask about implementation details the specialist can reasonably decide.
+Use the most recent user clarification to update the original request.
+"""
+
+ORCHESTRATOR_TASK_LEDGER_FACTS_PROMPT += FACTS_RESPONSE_CONTRACT
 
 
 # =============================================================================
@@ -147,6 +165,8 @@ Generate a step-by-step workflow plan that:
 2. Minimizes redundant data fetching (reuse artifacts when possible)
 3. Establishes clear dependencies between steps
 4. Provides complete, unambiguous instructions for each agent
+5. Preserves all user constraints. Required missing information or contradictory
+   requirements must be clarified before execution; never silently relax them.
 
 ---
 
@@ -190,6 +210,7 @@ Select a single spatial constraint mode for the overall plan. This choice must b
 - `database_extent` — Use the disaster's stored footprint/AOI from the database
 - `fetch_boundary` — Use a specific place / AOI boundary to constrain the analysis
 - `user_provided_aoi` — Use a user-provided AOI geometry or boundary artifact
+- `not_required` — The task needs no separate AOI constraint (for example, summarize all features in an uploaded layer)
 
 **Trigger Check (follow this order):**
 
@@ -202,7 +223,7 @@ Select a single spatial constraint mode for the overall plan. This choice must b
    - Applies when: The place name in the query is the disaster's location context (where the disaster occurred), NOT an additional spatial filter.
 
 3. **Check for place-constrained wording (additional spatial filter):**
-   - Choose `fetch_boundary` ONLY if the query implies a sub-area filter WITHIN the disaster extent, such as:
+   - Choose `fetch_boundary` if a named place constrains a general GIS task, or adds a sub-area filter within a disaster extent, such as:
      - Spatial prepositions indicating containment: "in [neighborhood]", "within [district]", "around [landmark]"
      - Nested geography indicating a sub-region: "[neighborhood], [city]" when the neighborhood is smaller than the disaster extent
      - Area qualifiers: "downtown area", "[facility] vicinity"
@@ -210,14 +231,15 @@ Select a single spatial constraint mode for the overall plan. This choice must b
    - The key distinction: Is the place name the disaster location, or an additional sub-area filter?
 
 4. **Default:**
-   - If none of the above apply clearly, choose `database_extent`.
+   - Choose `not_required` when the task needs no separate spatial constraint.
+   - If a required AOI is missing or ambiguous, ask for that information. Do not invent a disaster or use an unrelated database extent.
 
 **Decision Output (state explicitly):**
-- **Priority order:** `user_provided_aoi` → `database_extent` (if disaster explicitly referenced) → `fetch_boundary` → `database_extent` (default)
+- **Priority order:** relevant user AOI → referenced disaster extent (plus any requested sub-area) → named-place boundary → no separate AOI or clarification
 - If AOI artifact exists → `user_provided_aoi` (state the exact AOI artifact file path)
 - Else if disaster is explicitly referenced by type+date+location → `database_extent` (the disaster's stored AOI is the spatial extent)
 - Else if place-constrained wording implies sub-area filter → `fetch_boundary` (state the exact place/AOI string to use)
-- Else → `database_extent` (default)
+- Else → `not_required` if no separate AOI is needed; otherwise clarify the missing spatial scope
 
 **Sub-Area Boundaries (important):**
 When the query mentions BOTH a disaster AND a sub-area (neighborhood, district, vicinity of a place), the plan needs BOTH:
@@ -235,6 +257,8 @@ In such cases, add a step to fetch the sub-area boundary using {MAPS_AGENT} BEFO
   - If only {POSTGIS_AGENT} is needed, skip the AOI fetch step since it can query directly using disaster metadata.
   - **Sub-Area Rule:** If a sub-area is mentioned (neighborhood, district, etc.), add a step to fetch that boundary BEFORE extracting POIs/features within it.
 - If `fetch_boundary`: include an early step to obtain the boundary (reuse an existing boundary artifact if available or in context; otherwise fetch it) and ensure downstream steps use that boundary for spatial filtering.
+- If `not_required`: analyze the supplied features or requested table directly. Do not add a disaster lookup or boundary fetch.
+- Return the requested output: statistics-only requests do not require a map layer; produce both only when requested or needed to answer the task.
 
 **Examples:**
 - "Show damage from Saint Louis tornado 2025-05-16" → `database_extent` (disaster explicitly referenced; Saint Louis is the disaster location, not a filter)
@@ -332,7 +356,7 @@ Step 3: {RASTER_AGENT} - Analyze change between time periods
   Input: STAC items from Step 2, analysis objective
   → Output: change_map.tif (COG) or change_polygons.geojson
 ```
-Note: The {STAC_AGENT} can decide the dates rages on it's own.
+Note: The {STAC_AGENT} may choose date windows only when unspecified; preserve explicit user dates, sensor constraints and the request's temporal mode.
 ---
 
 ### Pattern 3: Multi-Location Comparison
@@ -478,7 +502,7 @@ Before finalizing your plan, verify:
 - [ ] Dependencies are valid (no circular refs, no orphaned steps)
 - [ ] Full semantic context provided (place names, disaster details, user goals)
 - [ ] Reusable artifacts from fact sheet are leveraged (exact file paths)
-- [ ] Spatial constraint mode selected above is followed (`user_provided_aoi` vs `fetch_boundary` vs `database_extent`)
+- [ ] Spatial constraint mode selected above is followed (`user_provided_aoi`, `fetch_boundary`, `database_extent`, or `not_required`)
 - [ ] Success criteria are clear and verifiable
 
 ---
@@ -517,12 +541,14 @@ ORCHESTRATOR_TASK_LEDGER_FACTS_UPDATE_PROMPT = """As a reminder, we are working 
 
 {task}
 
-It's clear we aren't making as much progress as we would like, but we may have learned something new. Please rewrite the following fact sheet, updating it to include anything new we have learned that may be helpful. Example edits can include (but are not limited to) adding new guesses, moving educated guesses to verified facts if appropriate, etc. Updates may be made to any section of the fact sheet, and more than one section of the fact sheet can be edited. This is an especially good time to update educated guesses, so please at least add or update one educated guess or hunch, and explain your reasoning.
+Update the fact sheet using observed user messages and tool results. Keep verified facts, unresolved questions and execution failures distinct. Preserve facts that remain supported; remove or correct claims contradicted by evidence. Do not invent missing data, artifacts or causes of failure. If a hypothesis helps recovery, label it unverified and state how to check it; no hypothesis is required. If there is no new evidence, say so.
 
 Here is the old fact sheet:
 
 {facts}
 """
+
+ORCHESTRATOR_TASK_LEDGER_FACTS_UPDATE_PROMPT += FACTS_RESPONSE_CONTRACT
 
 
 ORCHESTRATOR_TASK_LEDGER_PLAN_UPDATE_PROMPT = """## REPLAN REQUEST
@@ -576,10 +602,11 @@ ORCHESTRATOR_FINAL_ANSWER_PROMPT = """
 We are working on the following task:
 {task}
 
-We have completed the task.
-
-The above messages contain the conversation that took place to complete the task.
+The above messages contain the execution record, which may show complete, partial or failed work.
 
 Based on the information gathered, provide the final answer to the original request.
 The answer should be phrased as if you were speaking to the user.
+Use actual tool results and the supplied execution status to decide what was completed.
+Report failed or unmet requirements plainly. Do not invent values, files or successful
+outputs to fill gaps. Distinguish an empty result from an execution failure.
 """

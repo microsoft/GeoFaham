@@ -14,6 +14,7 @@ from agents.raster_ops_agent.io_utils import (
     get_bounds,
     compute_stats,
     write_result_as_cog,
+    read_raster_metadata,
 )
 
 
@@ -44,7 +45,8 @@ async def handle_single_raster(result: xr.DataArray) -> dict:
         "statistics": statistics,
         "bounds": bounds_4326,
         "min_scale": statistics.get("min"),
-        "max_scale": statistics.get("max")
+        "max_scale": statistics.get("max"),
+        "metadata": read_raster_metadata(output_path),
     }
 
 
@@ -80,6 +82,7 @@ async def handle_temporal_sequence(result: dict) -> dict:
             "bounds": bounds_4326,
             "statistics": stats,
             "label": label,
+            "metadata": read_raster_metadata(cog_path),
         }
         
         temporal_layers.append(layer_info)

@@ -12,30 +12,38 @@ const WebSocketManager = {
     _pollingTimer: null,
     _usingPolling: false,
     _sessionId: null,
+    _connectionVersion: 0,
 
     /**
      * Initialize connection - tries WebSocket first, falls back to polling
      */
     init: function(mode = 'multi-agent') {
-        const state = GeoFahamState;
+        this.disconnect();
+        GeoFahamState.currentMode = mode;
+        this._wsAttempts = 0;
+        this._tryWebSocket(mode);
+    },
 
+    disconnect: function() {
+        const state = GeoFahamState;
+        this._connectionVersion++;
         // Clean up previous connection
-        state._intentionalClose = true;
-        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-            state.ws.close();
+        const previousSocket = state.ws;
+        state.ws = null;
+        if (previousSocket && previousSocket.readyState < WebSocket.CLOSING) {
+            previousSocket.close();
         }
         this._stopPolling();
         if (state.reconnectInterval) {
-            clearInterval(state.reconnectInterval);
+            clearTimeout(state.reconnectInterval);
             state.reconnectInterval = null;
         }
-        state._intentionalClose = false;
-        state.currentMode = mode;
+        this.updateConnectionStatus(false);
+        ChatUI.disableInput();
         this._wsAttempts = 0;
         this._usingPolling = false;
         this._sessionId = null;
 
-        this._tryWebSocket(mode);
     },
 
     /* ------------------------------------------------------------------ */
@@ -50,8 +58,12 @@ const WebSocketManager = {
         const wsUrl = `${GeoFahamConfig.server.wsUrl}?mode=${mode}`;
         console.log(`WS attempt ${this._wsAttempts}/${maxAttempts}: ${wsUrl}`);
 
+        let ws;
+        let ready = false;
+        let initializationFailed = false;
         try {
-            state.ws = new WebSocket(wsUrl);
+            ws = new WebSocket(wsUrl);
+            state.ws = ws;
         } catch (e) {
             console.error('WebSocket constructor failed:', e);
             this._fallbackToPolling(mode);
@@ -60,45 +72,56 @@ const WebSocketManager = {
 
         // Timeout: if not open within 5 s, give up on this attempt
         const timeout = setTimeout(() => {
-            if (state.ws && state.ws.readyState !== WebSocket.OPEN) {
+            if (state.ws === ws && ws.readyState === WebSocket.CONNECTING) {
                 console.log('WS open timeout');
-                state._intentionalClose = true;
-                state.ws.close();
-                state._intentionalClose = false;
-                this._handleWsFail(mode);
+                ws.close();
             }
         }, 5000);
 
-        state.ws.onopen = () => {
+        ws.onopen = () => {
             clearTimeout(timeout);
-            this._wsAttempts = 0;
-            console.log('WebSocket connected');
-            this.updateConnectionStatus(true);
-            ChatUI.enableInput();
-            const modeNames = GeoFahamConfig.agentModes;
-            ChatUI.displayMessage(
-                `Connected in ${modeNames[state.currentMode]} mode. Ready to assist!`,
-                'system'
-            );
+            if (state.ws !== ws) return;
+            console.log('WebSocket connected; waiting for agents');
         };
 
-        state.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
+            if (state.ws !== ws) return;
             const message = JSON.parse(event.data);
             console.log("WS message:", message.type);
+            if (message.type === 'status' && (message.ready === true || message.data === 'Agents ready.')) {
+                ready = true;
+                this._wsAttempts = 0;
+                this.updateConnectionStatus(true);
+                ChatUI.enableInput();
+                ChatUI.displayMessage(
+                    `Connected in ${GeoFahamConfig.agentModes[mode]} mode. Ready to assist!`,
+                    'system'
+                );
+            }
+            if (message.type === 'error' && !ready) {
+                // Agent/configuration failures cannot be repaired by changing transport.
+                initializationFailed = true;
+            }
             MessageHandler.handleMessage(message);
+            if (initializationFailed) {
+                this.updateConnectionStatus(false);
+                ChatUI.disableInput();
+                ws.close();
+            }
         };
 
-        state.ws.onerror = (error) => {
+        ws.onerror = (error) => {
             clearTimeout(timeout);
             console.error('WebSocket error:', error);
         };
 
-        state.ws.onclose = () => {
+        ws.onclose = () => {
             clearTimeout(timeout);
-            if (state._intentionalClose) return;
+            if (state.ws !== ws) return;
             console.log('WebSocket closed');
             this.updateConnectionStatus(false);
-            this._handleWsFail(mode);
+            ChatUI.disableInput();
+            if (!initializationFailed) this._handleWsFail(mode);
         };
     },
 
@@ -106,7 +129,10 @@ const WebSocketManager = {
         const max = GeoFahamConfig.websocket.maxReconnectAttempts;
         if (this._wsAttempts < max) {
             console.log(`WS retry ${this._wsAttempts}/${max} in 2s...`);
-            setTimeout(() => this._tryWebSocket(mode), 2000);
+            GeoFahamState.reconnectInterval = setTimeout(() => {
+                GeoFahamState.reconnectInterval = null;
+                this._tryWebSocket(mode);
+            }, 2000);
         } else {
             console.log('WS failed after max attempts, switching to HTTP polling');
             this._fallbackToPolling(mode);
@@ -118,6 +144,7 @@ const WebSocketManager = {
     /* ------------------------------------------------------------------ */
 
     _fallbackToPolling: function(mode) {
+        const version = this._connectionVersion;
         this._usingPolling = true;
         ChatUI.displayMessage('WebSocket unavailable — using HTTP polling mode.', 'system');
 
@@ -126,8 +153,14 @@ const WebSocketManager = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode: mode })
         })
-        .then(r => r.json())
+        .then(async r => {
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.detail || 'Polling initialization failed');
+            if (!data.session_id) throw new Error('Missing polling session ID');
+            return data;
+        })
         .then(data => {
+            if (version !== this._connectionVersion) return;
             this._sessionId = data.session_id;
             console.log('Polling session:', this._sessionId);
             this.updateConnectionStatus(true);
@@ -139,8 +172,11 @@ const WebSocketManager = {
             this._startPolling();
         })
         .catch(err => {
+            if (version !== this._connectionVersion) return;
             console.error('Polling init failed:', err);
-            ChatUI.displayMessage('Failed to connect. Please reload.', 'error');
+            this.updateConnectionStatus(false);
+            ChatUI.disableInput();
+            ChatUI.displayMessage('Failed to connect: ' + err.message, 'error');
         });
     },
 
@@ -158,9 +194,11 @@ const WebSocketManager = {
 
     _poll: function() {
         if (!this._sessionId) return;
-        fetch(`${GeoFahamConfig.polling.pollUrl}?session_id=${this._sessionId}`)
+        const sessionId = this._sessionId;
+        fetch(`${GeoFahamConfig.polling.pollUrl}?session_id=${sessionId}`)
             .then(r => r.json())
             .then(data => {
+                if (sessionId !== this._sessionId) return;
                 if (data.messages) {
                     data.messages.forEach(msg => {
                         console.log("Poll message:", msg.type);

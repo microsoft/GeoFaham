@@ -35,7 +35,6 @@ from autogen_agentchat.ui import Console
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_core import CancellationToken
 
-from agents.core.config import get_config
 from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 
@@ -120,28 +119,25 @@ async def user_input_func(prompt: str, cancellation_token: Optional[Cancellation
 
 async def create_agent(agent_type: str):
     """Create an agent instance by type."""
-    config = get_config()
     agent_info = AVAILABLE_AGENTS[agent_type]
     
     if agent_type == "team":
         # Import and create full team
         from agents.team import get_team
         team = await get_team(user_input_func)
-        return team, "gpt-5.1 (orchestrator)", None
+        return team, "ORCHESTRATOR", None
     
-    # Get model for this agent
     agent_key = agent_info["key"]
-    model = config.get_agent_model(agent_key)
     # Import factory function
     module_path, func_name = agent_info["factory"].rsplit(":", 1)
     module = __import__(module_path, fromlist=[func_name])
     factory_func = getattr(module, func_name)
     
     # Create model client and agent
-    client = init_model_client(model=model)
+    client = init_model_client(client_key=agent_key)
     agent = factory_func(client)
     
-    return agent, model, agent_info
+    return agent, agent_key, agent_info
 
 
 async def run_single_agent_console(agent, model: str, agent_info: dict):

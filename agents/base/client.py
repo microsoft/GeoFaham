@@ -4,13 +4,13 @@
 """
 Model Client Factory
 
-Centralized creation of Azure OpenAI clients with consistent configuration.
-Supports both API key and Azure AD token authentication.
+Centralized creation of AutoGen model clients from component configs.
 """
 
-from typing import Optional, Union
+from copy import deepcopy
+from typing import Optional
 
-from autogen_ext.models.openai import AzureOpenAIChatCompletionClient
+from autogen_core.models import ChatCompletionClient
 
 from agents.core.config import AgentsConfig, get_config
 from agents.core.logging import get_logger
@@ -20,112 +20,57 @@ logger = get_logger("base.client")
 
 class ModelClientFactory:
     """
-    Factory for creating Azure OpenAI clients.
-    
-    Centralizes client creation with consistent configuration.
-    Uses API key if AZURE_OPENAI_KEY is set, otherwise falls back to Azure AD.
+    Factory for creating AutoGen chat completion clients.
     """
-    
-    _token_provider = None
-    
-    @classmethod
-    def get_token_provider(cls):
-        """Get or create the Azure AD token provider (singleton, lazy load)."""
-        if cls._token_provider is None:
-            # Only import Azure auth when needed
-            from autogen_ext.auth.azure import AzureTokenProvider
-            from azure.identity import DefaultAzureCredential
-            
-            cls._token_provider = AzureTokenProvider(
-                DefaultAzureCredential(),
-                "https://cognitiveservices.azure.com/.default",
-            )
-        return cls._token_provider
-    
+
     @classmethod
     def create(
         cls,
-        model: str = "gpt-4o",
+        client_key: str = "DEFAULT",
         config: Optional[AgentsConfig] = None,
         temperature: Optional[float] = None,
-    ) -> AzureOpenAIChatCompletionClient:
+    ) -> ChatCompletionClient:
         """
-        Create an Azure OpenAI client for the specified model.
-        
-        Auth priority:
-        1. API key (if AZURE_OPENAI_KEY is set)
-        2. Azure AD token (DefaultAzureCredential)
+        Create a chat completion client for a role/profile key.
         
         Args:
-            model: Model name ('gpt-4o' or 'gpt-5.1')
+            client_key: DEFAULT, REASONING, or an agent key like VECTOR_AGENT
             config: Optional configuration override
             temperature: Optional temperature parameter
         
         Returns:
-            Configured AzureOpenAIChatCompletionClient
-        
-        Raises:
-            ValueError: If endpoint not configured
+            Configured AutoGen ChatCompletionClient
         """
         config = config or get_config()
-        model_spec = config.get_model_spec(model)
-        if not model_spec.endpoint:
-            raise ValueError("Azure OpenAI endpoint not configured")
-        
-        # Build client kwargs
-        kwargs = {
-            "azure_endpoint": model_spec.endpoint,
-            "azure_deployment": model_spec.deployment,
-            "model": model_spec.model,
-            "api_version": model_spec.api_version,
-        }
-        
-        # Use API key if available, otherwise Azure AD token
-        api_key = config.azure_openai.api_key
-        if api_key:
-            kwargs["api_key"] = api_key
-            logger.debug(f"Using API key authentication for model={model}")
-        else:
-            kwargs["azure_ad_token_provider"] = cls.get_token_provider()
-            logger.debug(f"Using Azure AD authentication for model={model}")
-        
-        # Add reasoning effort for GPT-5/o1 models
-        if "gpt-5" in model.lower() or "o1" in model.lower():
-            kwargs["reasoning_effort"] = model_spec.reasoning_effort
-        
-        if "gpt-5" in model.lower():
-            kwargs["model_info"] = {
-                "family": "gpt",
-                "vision": False,
-                "function_calling": True,
-                "json_output": True,
-                "structured_output": True,
-            }
-        
-        logger.debug(f"Creating client for model={model}, deployment={model_spec.deployment}")
-        
-        return AzureOpenAIChatCompletionClient(**kwargs)
+        component = deepcopy(config.get_model_client_component(client_key))
+        component_config = component.setdefault("config", {})
+
+        if temperature is not None and "temperature" not in component_config:
+            component_config["temperature"] = temperature
+
+        logger.debug(f"Creating model client for {client_key}")
+        return ChatCompletionClient.load_component(component)
     
     @classmethod
     def reset(cls) -> None:
-        """Reset the cached token provider."""
-        cls._token_provider = None
+        """Reset cached factory state."""
+        return None
 
 
 def init_model_client(
-    model: str = "gpt-4o",
+    client_key: str = "DEFAULT",
     temperature: Optional[float] = None,
     config: Optional[AgentsConfig] = None,
-) -> AzureOpenAIChatCompletionClient:
+) -> ChatCompletionClient:
     """
-    Initialize an Azure OpenAI client.
+    Initialize an AutoGen chat completion client.
     
     Args:
-        model: Model name ('gpt-4o' or 'gpt-5.1')
+        client_key: DEFAULT, REASONING, or an agent key like VECTOR_AGENT
         temperature: Optional temperature parameter
         config: Optional configuration override
     
     Returns:
-        Configured AzureOpenAIChatCompletionClient
+        Configured AutoGen ChatCompletionClient
     """
-    return ModelClientFactory.create(model=model, config=config, temperature=temperature)
+    return ModelClientFactory.create(client_key=client_key, config=config, temperature=temperature)

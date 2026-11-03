@@ -83,11 +83,6 @@
                 Reset
             </button>
             
-            <button class="upload-btn debug-only" id="save-gt-button" title="Save Benchmark Ground Truth" aria-label="Save current conversation as benchmark ground truth" style="display: none;">
-                <i class="fas fa-save" aria-hidden="true"></i>
-                Save GT
-            </button>
-            
             <div class="connection-status connected" id="connection-status">
                 <div class="status-indicator"></div>
                 <span id="status-text">Connected</span>
@@ -341,50 +336,6 @@
         </div>
     </div>
 
-    <!-- Save Benchmark GT Modal -->
-    <div id="save-gt-modal" class="modal">
-        <div class="modal-content" style="max-width: 400px;">
-            <div class="modal-header">
-                <h2><i class="fas fa-save"></i> Save Benchmark Ground Truth</h2>
-                <button class="modal-close" id="close-save-gt-modal">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            
-            <div class="modal-body">
-                <p style="margin-bottom: 1rem; color: #6b7280; font-size: 0.9rem;">
-                    <i class="fas fa-info-circle"></i> Save the current conversation as benchmark ground truth data.
-                </p>
-                
-                <div class="form-group">
-                    <label for="question-number-input">Question Number *</label>
-                    <input 
-                        type="text" 
-                        id="question-number-input" 
-                        placeholder="e.g., Q001"
-                        style="width: 100%; padding: 0.75rem; border: 1px solid #d1d5db; border-radius: 0.5rem; font-size: 1rem;"
-                    />
-                    <p style="margin-top: 0.5rem; color: #6b7280; font-size: 0.8rem;">
-                        Files will be saved to: benchmark_gt/{question}/run_X/
-                    </p>
-                </div>
-                
-                <div id="save-gt-error" class="upload-error" style="display: none;"></div>
-                <div id="save-gt-success" style="display: none; padding: 0.75rem; background: #d1fae5; border-radius: 0.5rem; color: #065f46; margin-bottom: 1rem;"></div>
-                
-                <div class="modal-actions">
-                    <button type="button" class="btn-secondary" id="cancel-save-gt">
-                        Cancel
-                    </button>
-                    <button type="button" class="btn-primary" id="submit-save-gt">
-                        <i class="fas fa-save"></i>
-                        Save GT
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Map Analysis Toolbox -->
     <div id="toolbox-container" class="toolbox-container">
         <button id="toolbox-toggle" class="toolbox-toggle" title="Analysis Tools">
@@ -439,7 +390,6 @@
     <!-- Modal Modules -->
     <script src="/frontend/js/modals/upload-modal.js"></script>
     <script src="/frontend/js/modals/visualize-modal.js"></script>
-    <script src="/frontend/js/modals/benchmark-modal.js"></script>
     
     <!-- Main Application Entry Point -->
     <script src="/frontend/js/app.js"></script>

@@ -49,15 +49,39 @@ understanding the data. The pattern is: EXPLORE → DECIDE → APPLY
 1. TOOL INTERFACE
 ════════════════════════════════════════════════════════════════════════════════
 
-execute_custom_raster_code(code, result_explanation, return_layer, expected_result_type)
+execute_custom_raster_code(code, result_explanation, return_layer, expected_result_type, temporal_mode="unspecified")
 
 Parameters:
 - code: Python code (assign final output to `result` variable)
 - result_explanation: Human-readable description of results
 - return_layer: True = save raster/vector for map display, False = stats only
 - expected_result_type: 'raster' | 'vector' | 'statistics' | 'mix'
+- temporal_mode: 'unspecified' | 'single_scene' | 'composite' | 'change_detection'; match the orchestrator's temporal mode exactly
 
 Start code with: "# No imports; use preloaded modules and helpers."
+
+For statistics-only requests, set expected_result_type="statistics", return_layer=False,
+and assign a non-empty dictionary of named JSON-compatible statistics to result.
+Use Python numbers or None for undefined values; do not return a bare number or
+put the only copy of the answer in metadata. Metadata holds provenance and context.
+For raster/vector outputs or saved intermediates, accompanying statistics may stay
+in metadata["stats"].
+
+Statistics-only example (replace the path with the registered input path):
+```python
+# No imports; use preloaded modules and helpers.
+metric, epsg = load_raster_file("/path/to/metric.tif")
+valid = np.isfinite(metric)
+source_nodata = metric.rio.nodata
+if source_nodata is not None:
+    valid = valid & (metric != source_nodata)
+valid_pixels = int(valid.sum().compute())
+mean = None
+if valid_pixels > 0:
+    mean = float(metric.where(valid).mean(skipna=True).compute())
+result = {"valid_pixels": valid_pixels, "mean": mean}
+metadata = {}
+```
 
 ════════════════════════════════════════════════════════════════════════════════
 2. DATA LOADING
@@ -97,7 +121,14 @@ Default: 20-30m unless task demands otherwise.
 
 2.4 TEMPORAL SELECTION
 ──────────────────────
-STAC files may contain many scenes. Filter immediately after loading:
+STAC files may contain many candidate scenes. For a single-date request, pass
+`temporal_mode="single_scene"` and select one acquisition date BEFORE loading:
+`load_stac_items(path, bbox, bands, resolution, properties_filter={"datetime": "<exact STAC timestamp>"})`.
+Use get_available_responses metadata to identify the candidate dates. Never replace a
+single-date request with a median or other multi-date composite. The loader rejects
+multiple dates in single_scene mode and records actual acquisition dates and scene IDs.
+Use composites only when requested, with `temporal_mode="composite"`.
+For multi-date requests, you may also filter immediately after loading:
 
 ```python
 da, epsg = load_stac_items(path, bbox, bands, resolution)
@@ -107,8 +138,6 @@ if "time" in da.dims:
 ```
 
 For composites: `composite = da.median(dim="time").persist()`
-
-# Add this section after "2.4 TEMPORAL SELECTION":
 
 2.5 BAND DIMENSION HANDLING
 ───────────────────────────
@@ -131,6 +160,7 @@ if "band" in da.dims and da.sizes["band"] == 1:
 
 # If you need integer indexing, use isel():
 # first_band = da.isel(band=0)
+```
 
 ════════════════════════════════════════════════════════════════════════════════
 3. PERFORMANCE RULES
@@ -152,8 +182,9 @@ NEVER .compute() full rasters early. Keep lazy until final output.
 4. RESULT & METADATA CONTRACT
 ════════════════════════════════════════════════════════════════════════════════
 
-4.1 RESULT VARIABLE (map layers only)
+4.1 RESULT VARIABLE
 ─────────────────────────────────────
+Assign actual computed objects, not the class names shown in this shape guide:
 ```python
 # Single layer
 result = xr.DataArray  # or gpd.GeoDataFrame
@@ -163,6 +194,9 @@ result = {"layer1": xr.DataArray, "layer2": gpd.GeoDataFrame}
 
 # Timeline (nested dict - for temporal comparison with shared color scale)
 result = {"ndvi_timeline": {"2024-01": arr1, "2024-06": arr2, "2024-12": arr3}}
+
+# Statistics only (expected_result_type="statistics", return_layer=False)
+result = {"mean": 0.5, "valid_pixels": 2}
 ```
 
 4.2 RASTER REQUIREMENTS
@@ -173,8 +207,9 @@ Every raster must have:
 - NoData: `.rio.write_nodata(255)` for uint8, `-9999` for float
 - Persisted: `.persist()` before assignment
 
-4.3 METADATA VARIABLE (everything non-spatial)
+4.3 METADATA VARIABLE (context and statistics accompanying spatial outputs)
 ──────────────────────────────────────────────
+Shape guide only: replace type names with computed Python values.
 ```python
 metadata = {
     "description": "What this step produced",
@@ -218,29 +253,29 @@ if da1_epsg != da2_epsg:
 ```python
 # No imports; use preloaded modules and helpers.
 
-# Load and process
-da, epsg = load_stac_items("/path/to/stac.json", bbox, ["band1", "band2"], 30)
-if "time" in da.dims:
-    da = da.sel(time=slice("2025-01-01", "2025-01-31"))
-composite = da.median(dim="time").persist()
-
-# Clip if AOI provided
-aoi, _ = load_vector_file("/path/to/aoi.geojson")
-composite = clip_to_aoi(composite, aoi)
-
-# Compute analysis metric (index, difference, etc.)
-metric = <your_computation>
+# Explore an already-computed metric; replace the path with its registered input.
+# When deriving a metric from STAC, apply the requested temporal mode first.
+# A temporal median is permitted only when a composite was requested.
+metric, epsg = load_raster_file("/path/to/metric.tif")
+valid = np.isfinite(metric)
+source_nodata = metric.rio.nodata
+if source_nodata is not None:
+    valid = valid & (metric != source_nodata)
+metric = metric.where(valid)
 metric = metric.rio.write_crs(f"EPSG:{epsg}")
 metric = metric.persist()
-
-results = {}
-metadata = {}
-# Extract comprehensive statistics like min max mean, quantiles etc and put then in metadata
+valid_pixels = int(valid.sum().compute())
+stats = {"valid_pixels": valid_pixels, "min": None, "max": None, "mean": None, "p50": None}
+if valid_pixels > 0:
+    stats["min"] = float(metric.min(skipna=True).compute())
+    stats["max"] = float(metric.max(skipna=True).compute())
+    stats["mean"] = float(metric.mean(skipna=True).compute())
+    stats["p50"] = float(metric.quantile(0.5, skipna=True).compute())
 
 result = {"analysis_metric": metric}
 metadata = {
     "description": "Step 1: Computed metric and extracted data distribution",
-    "stats": stats, #stats computeted above
+    "stats": stats,
     "save_as_intermediate": True,
     "intermediate_name": "step1_analysis"
 }
@@ -258,8 +293,12 @@ metric, epsg = load_raster_file("/path/from/step1/step1_analysis_analysis_metric
 # Example: Step 1 stats showed p75=0.42, using that as threshold
 threshold = 0.42  # Based on Step 1 statistics
 
-# Apply classification
-classified = xr.where(metric > threshold, 1, 0).astype("uint8")
+# Preserve missing pixels before classification; declaring nodata later cannot restore them.
+valid = np.isfinite(metric)
+source_nodata = metric.rio.nodata
+if source_nodata is not None:
+    valid = valid & (metric != source_nodata)
+classified = xr.where(valid, xr.where(metric > threshold, 1, 0), 255).astype("uint8")
 classified = classified.rio.write_crs(f"EPSG:{epsg}")
 classified = classified.rio.write_transform(metric.rio.transform())
 classified = classified.rio.write_nodata(255)
@@ -274,13 +313,13 @@ metadata = {
     "description": "Step 2: Applied classification using data-informed threshold",
     "parameters": {"threshold": threshold, "rationale": "Used p75 from Step 1"},
     "stats": {"total_pixels": total, "positive_pixels": positive, 
-              "positive_fraction": positive/total if total > 0 else 0},
+              "positive_fraction": positive/total if total > 0 else None},
     "class_labels": {0: "Below threshold", 1: "Above threshold"}
 }
 ```
 
 ════════════════════════════════════════════════════════════════════════════════
-7. SANDBOX ENVIRONMENT
+7. EXECUTION ENVIRONMENT
 ════════════════════════════════════════════════════════════════════════════════
 
 **Pre-loaded modules (NO import statements needed):**
@@ -351,7 +390,7 @@ closed = skimage.morphology.closing(mask, skimage.morphology.disk(2))
 ☐ .persist() after every reduction operation
 ☐ CRS re-attached after xr.where(), boolean ops, .astype()
 ☐ No time dimension in final result layers
-☐ Statistics in metadata, not result
+☐ Statistics-only: named statistics dictionary in result; raster/vector/intermediate outputs: accompanying statistics in metadata["stats"]
 ☐ MULTI-STEP: If making ANY data-dependent decision → use multi-step
    - Step 1 must set save_as_intermediate=True and return stats
    - Step 2+ must load intermediate via load_raster_file()

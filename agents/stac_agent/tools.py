@@ -7,7 +7,7 @@ STAC Agent Tools - Execute STAC queries against Microsoft Planetary Computer
 
 import os
 import json
-import hashlib
+import uuid
 from typing import Dict, Any, Optional, List
 import aiofiles
 import geopandas as gpd
@@ -196,14 +196,8 @@ async def execute_stac_search(
         # Get population stats
         population_stats = _get_population_stats(geojson_path)
         
-        # Create deterministic hash for file naming
-        all_collection_ids = [r["collection_id"] for r in group_results.values() if r["collection_id"]]
-        query_hash = hashlib.md5(
-            json.dumps({
-                "collections": sorted(all_collection_ids),
-                "bbox": bbox
-            }, sort_keys=True).encode()
-        ).hexdigest()[:12]
+        # Keep artifacts immutable for earlier response IDs, including repeated searches.
+        query_hash = uuid.uuid4().hex
         
         os.makedirs(export_dir, exist_ok=True)
         
@@ -305,7 +299,7 @@ def _search_all_groups(catalog, collection_groups, bbox, limit, min_coverage_per
                 min_coverage_percent=min_coverage_percent
             )
             
-            if date1_result:
+            if date1_result and (not group.daterange2 or date2_result):
                 group_date1_result = date1_result
                 group_date2_result = date2_result
                 successful_collection = collection_id

@@ -35,11 +35,9 @@ from agents.core.types import (
 )
 from agents.core.config import (
     AgentsConfig,
-    AzureOpenAIConfig,
     DatabaseConfig,
     OSMConfig,
     PathsConfig,
-    ModelSpec,
     QueryConfig,
     get_config,
     reset_config,
@@ -79,11 +77,9 @@ __all__ = [
     "ArtifactFormat",
     # Config
     "AgentsConfig",
-    "AzureOpenAIConfig",
     "DatabaseConfig",
     "OSMConfig",
     "PathsConfig",
-    "ModelConfig",
     "QueryConfig",
     "get_config",
     "reset_config",

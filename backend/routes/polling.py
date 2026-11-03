@@ -44,7 +44,8 @@ from agents.core.response_store import get_response_store
 from agents.shared.geojson import generate_response_id, results_to_geojson
 from backend.routes.config import TEAM_STATE_PATH, CONVERSATION_HISTORY_PATH
 from backend.routes.history import get_history
-from backend.routes.websocket import APIResponse, MessageProcessor, save_user_raw_geojson
+from backend.routes.websocket import APIResponse, MessageProcessor, prepare_user_message
+from backend.services.chat_tasks import active_chat_tasks
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/polling", tags=["polling"])
@@ -90,18 +91,17 @@ class PollingSession:
     async def process_message(self, data: dict):
         """Run the agent stream in the background, pushing responses to the outbox."""
         self.busy = True
+        task = asyncio.current_task()
+        cancellation_token = CancellationToken()
+        active_chat_tasks[task] = cancellation_token
         try:
-            # Handle user raw JSON upload
-            if data.get("user_raw_json", ""):
-                user_raw_geojson_path = await save_user_raw_geojson(data.get("user_raw_json"))
-                data.pop("user_raw_json")
-                data["content"] += f"\n\n User_JSON_START {user_raw_geojson_path} User_JSON_END"
+            data = await prepare_user_message(data)
 
             request = TextMessage.model_validate(data)
             start_time = time.time()
             total_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
 
-            async for message in self.team.run_stream(task=request):
+            async for message in self.team.run_stream(task=request, cancellation_token=cancellation_token):
                 if not isinstance(message, TaskResult):
                     self.history.append(message.model_dump(mode="json"))
                     if hasattr(message, "models_usage") and message.models_usage:
@@ -117,6 +117,8 @@ class PollingSession:
             logger.error(f"Polling process_message error: {e}")
             await self.enqueue(APIResponse(type="error", error_message=str(e), source="system"))
         finally:
+            cancellation_token.cancel()
+            active_chat_tasks.pop(task, None)
             self.busy = False
 
     async def _process_stream_message(
@@ -179,12 +181,16 @@ async def polling_init(req: InitRequest):
     session_id = str(uuid.uuid4())
     session = PollingSession(req.mode)
     _sessions[session_id] = session
+    task = asyncio.current_task()
+    active_chat_tasks[task] = None
 
     try:
         await session.initialize()
     except Exception as e:
         _sessions.pop(session_id, None)
         raise HTTPException(status_code=500, detail=f"Failed to initialize session: {e}")
+    finally:
+        active_chat_tasks.pop(task, None)
 
     logger.info(f"Polling session created: {session_id} mode={req.mode}")
     return InitResponse(session_id=session_id)
@@ -204,7 +210,9 @@ async def polling_send(req: SendRequest):
         data["user_raw_json"] = req.user_raw_json
 
     # Fire-and-forget the agent run so we can return immediately
-    asyncio.create_task(session.process_message(data))
+    session.busy = True
+    task = asyncio.create_task(session.process_message(data))
+    active_chat_tasks[task] = None
     return {"status": "accepted"}
 
 

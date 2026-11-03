@@ -12,10 +12,15 @@ import uuid
 from typing import Any
 import aiofiles
 import geopandas as gpd
+import numpy as np
+from shapely.validation import explain_validity
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
 from backend.routes.config import USER_DATA_PATH, USER_ARTIFACTS_JSON
+from agents.core.types import GeoFahamToolResponse
+from agents.core.response_store import get_response_store
+from agents.shared.analysis import collect_property_schema
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,17 +59,29 @@ async def process_uploaded_geojson(
         if not features:
             raise ValueError("GeoJSON contains no features")
         
-        gdf = gpd.GeoDataFrame.from_features(features)
-        
-        # Ensure CRS is EPSG:4326
-        if gdf.crs is None:
-            gdf.set_crs(epsg=4326, inplace=True)
-        elif gdf.crs.to_epsg() != 4326:
-            gdf = gdf.to_crs(epsg=4326)
+        if any(not feature.get('geometry') for feature in features):
+            raise ValueError("Each feature must contain a geometry")
+        crs = geojson_data.get('crs')
+        source_crs = 'EPSG:4326'
+        if crs:
+            if not isinstance(crs, dict) or crs.get('type') != 'name':
+                raise ValueError("Unsupported CRS declaration; use a named EPSG CRS")
+            source_crs = crs['properties']['name']
+        gdf = gpd.GeoDataFrame.from_features(features, crs=source_crs).to_crs(epsg=4326)
+        for geometry in gdf.geometry:
+            if geometry is None or geometry.is_empty:
+                raise ValueError("Each feature must contain a non-empty geometry")
+            if not geometry.is_valid:
+                raise ValueError(f"Invalid geometry: {explain_validity(geometry)}")
+            if geometry.geom_type not in ('Point', 'MultiPoint', 'LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'):
+                raise ValueError(f"Unsupported geometry type: {geometry.geom_type}")
+        bounds = gdf.total_bounds
+        if not np.isfinite(bounds).all() or bounds[0] < -180 or bounds[2] > 180 or bounds[1] < -90 or bounds[3] > 90:
+            raise ValueError("Coordinates are outside valid longitude/latitude bounds; check the input CRS")
         
         # Generate unique ID and save path
         file_id = uuid.uuid4().hex
-        save_filename = f"{file_id}_{filename}"
+        save_filename = f"{file_id}_{os.path.basename(filename)}"
         file_path = os.path.join(USER_DATA_PATH, save_filename)
         
         # Convert back to GeoJSON dict
@@ -74,33 +91,13 @@ async def process_uploaded_geojson(
         async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
             await f.write(json.dumps(geojson_result, ensure_ascii=False))
         
-        # Compute property keys and geometry types
-        property_keys = {'points': {}, 'polygons': {}, 'lines': {}}
-        geom_types = set()
-        
-        for feat in geojson_result.get("features", []):
-            geom_type = feat['geometry']['type']
-            geom_types.add(geom_type)
-            props = feat.get('properties', {})
-            
-            if geom_type in ['Point', 'MultiPoint']:
-                if not property_keys['points'] and props:
-                    property_keys['points'] = {
-                        k: type(v).__name__ if v is not None else "NoneType" 
-                        for k, v in props.items()
-                    }
-            elif geom_type in ['Polygon', 'MultiPolygon']:
-                if not property_keys['polygons'] and props:
-                    property_keys['polygons'] = {
-                        k: type(v).__name__ if v is not None else "NoneType" 
-                        for k, v in props.items()
-                    }
-            elif geom_type in ['LineString', 'MultiLineString']:
-                if not property_keys['lines'] and props:
-                    property_keys['lines'] = {
-                        k: type(v).__name__ if v is not None else "NoneType" 
-                        for k, v in props.items()
-                    }
+        features = geojson_result['features']
+        property_keys = {
+            'points': collect_property_schema(features, ['Point', 'MultiPoint']),
+            'polygons': collect_property_schema(features, ['Polygon', 'MultiPolygon']),
+            'lines': collect_property_schema(features, ['LineString', 'MultiLineString']),
+        }
+        geom_types = {feature['geometry']['type'] for feature in features}
         
         # Create artifact metadata
         artifact_data = {
@@ -117,7 +114,8 @@ async def process_uploaded_geojson(
                 "features_count": len(geojson_result.get("features", [])),
                 "stats": None,
                 "property_keys": property_keys,
-                "geom_types": list(geom_types)
+                "geom_types": list(geom_types),
+                "metadata": {"crs": "EPSG:4326", "bounds": bounds.tolist()},
             }
         }
         
@@ -138,10 +136,18 @@ async def process_uploaded_geojson(
         # Save updated user artifacts
         async with aiofiles.open(USER_ARTIFACTS_JSON, 'w') as f:
             await f.write(json.dumps(user_artifacts, indent=2))
+
+        response = GeoFahamToolResponse(
+            response_id=f"user_{file_id}", source="user", artifact=artifact_data['artifact'],
+            summary=f"Uploaded file: {title}. {description}",
+            metadata={"uploaded_file": True, "title": title, "filename": filename},
+        )
+        get_response_store().store(response)
         
         return {
             "success": True,
             "artifact_id": file_id,
+            "response_id": response.response_id,
             "filename": save_filename,
             "features_count": artifact_data["artifact"]["features_count"],
             "geometry_types": artifact_data["artifact"]["geom_types"],

@@ -36,10 +36,16 @@ def _configure_osmnx():
     ox.settings.log_console = False
     ox.settings.use_cache = True
     ox.settings.cache_folder = config.osm.cache_folder
-    ox.settings.nominatim_url = config.osm.nominatim_url
-    ox.settings.overpass_url = config.osm.overpass_url
+    if config.osm.nominatim_url:
+        ox.settings.nominatim_url = config.osm.nominatim_url
+    if config.osm.overpass_url:
+        ox.settings.overpass_url = config.osm.overpass_url
     
-    logger.info(f"OSMnx configured with Nominatim: {config.osm.nominatim_url}, Overpass: {config.osm.overpass_url}")
+    logger.info(
+        "OSMnx configured with Nominatim: %s, Overpass: %s",
+        ox.settings.nominatim_url,
+        ox.settings.overpass_url,
+    )
 
 # Configure on module load
 _configure_osmnx()
@@ -327,6 +333,12 @@ async def run_osmnx_async(func, *args, **kwargs):
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 
+async def features_from_bbox(bbox, tags):
+    """Convert the tools' north/south/east/west bounds to OSMnx 2's tuple."""
+    north, south, east, west = bbox
+    return await run_osmnx_async(ox.features_from_bbox, (west, south, east, north), tags=tags)
+
+
 async def reverse_geocode_nominatim(
     lat: float,
     lon: float,
@@ -336,7 +348,7 @@ async def reverse_geocode_nominatim(
     """
     Reverse geocode coordinates to address using Nominatim API.
     
-    Uses the configured proxy URL from config.osm.nominatim_url.
+    Uses the configured proxy URL from config.osm.nominatim_url, if set.
     
     Args:
         lat: Latitude in WGS84
@@ -349,7 +361,7 @@ async def reverse_geocode_nominatim(
         Keys include: display_name, address (detailed breakdown), lat, lon
     """
     config = get_config()
-    base_url = config.osm.nominatim_url.rstrip("/")
+    base_url = (config.osm.nominatim_url or ox.settings.nominatim_url).rstrip("/")
     
     # Nominatim reverse endpoint
     url = f"{base_url}/reverse"

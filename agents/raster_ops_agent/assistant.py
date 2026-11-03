@@ -14,7 +14,7 @@ from agents.raster_ops_agent._prompts import SYS_PROMPT
 from agents.core.response_store import get_available_responses
 from agents.core.constants import AGENT_NAMES
 
-DESCRIPTION = """Performs raster analysis (indices, change detection, classification) on STAC items via Python code generation. Requires stac_agent output. Outputs COG rasters and GeoJSON."""
+DESCRIPTION = """Performs raster analysis (indices, change detection, classification, statistics) on STAC items or existing saved rasters via Python code generation. New imagery requires stac_agent output; supplied rasters can be used directly. Outputs COG rasters, GeoJSON or statistics."""
 
 DESCRIPTION_V0 = """
 Executes raster analysis on satellite imagery from STAC Agent using Python code generation.

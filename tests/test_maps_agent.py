@@ -9,8 +9,6 @@ Run: python -m tests.test_maps_agent
 
 import asyncio
 import json
-from agents.core.config import get_config
-from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 from agents.maps_agent.assistant import create_map_search_agent
 from agents.maps_agent.tools import (
@@ -103,11 +101,9 @@ def test_create_agent():
     print("Testing create_map_search_agent()")
     print("=" * 60)
     
-    config = get_config()
-    model = config.get_agent_model("MAPS_AGENT")
-    print(f"Using model: {model}")
+    print("Using model client: MAPS_AGENT")
     
-    client = init_model_client(model=model)
+    client = init_model_client(client_key="MAPS_AGENT")
     agent = create_map_search_agent(client)
     
     print(f"✓ Agent created: {agent.name}")

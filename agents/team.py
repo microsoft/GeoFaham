@@ -17,7 +17,7 @@ from autogen_agentchat.conditions import TextMentionTermination
 from autogen_core import CancellationToken
 
 from agents.base.client import init_model_client
-from agents.core.config import get_config, get_team_state_path
+from agents.core.config import get_team_state_path
 from agents.core.constants import AGENT_NAMES
 from agents.core.logging import get_logger
 
@@ -43,21 +43,19 @@ async def get_team(
     from agents.stac_agent.assistant import create_stac_agent
     from agents.raster_ops_agent import create_raster_ops_agent
     
-    config = get_config()
-    
-    # Create sub-agents with models from config
+    # Create sub-agents with model clients from config
     postgis_agent = create_vector_agent(
-        init_model_client(model=config.get_agent_model("VECTOR_AGENT")), 
+        init_model_client(client_key="VECTOR_AGENT"),
         AGENT_NAMES["VECTOR_AGENT"]
     )
     map_search_agent = create_map_search_agent(
-        init_model_client(model=config.get_agent_model("MAPS_AGENT"))
+        init_model_client(client_key="MAPS_AGENT")
     )
     stac_agent = create_stac_agent(
-        init_model_client(model=config.get_agent_model("STAC_AGENT"))
+        init_model_client(client_key="STAC_AGENT")
     )
     raster_ops_agent = create_raster_ops_agent(
-        init_model_client(model=config.get_agent_model("RASTER_AGENT"))
+        init_model_client(client_key="RASTER_AGENT")
     )
     
     user_proxy = UserProxyAgent(
@@ -67,9 +65,6 @@ async def get_team(
     
     termination = TextMentionTermination("bye")
     
-    planner_model = config.get_agent_model("ORCHESTRATOR_PLANNER")
-    progress_model = config.get_agent_model("ORCHESTRATOR_PROGRESS")
-    
     team = GeoFahamGroupChat(
         [
             postgis_agent,
@@ -78,8 +73,8 @@ async def get_team(
             raster_ops_agent,
             user_proxy
         ],
-        model_client=init_model_client(model=planner_model),
-        model_client2=init_model_client(model=progress_model),
+        model_client=init_model_client(client_key="ORCHESTRATOR_PLANNER"),
+        model_client2=init_model_client(client_key="ORCHESTRATOR_PROGRESS"),
         termination_condition=termination,
     )
     
@@ -114,8 +109,6 @@ def create_single_agent(agent_name: str):
     from agents.stac_agent.assistant import create_stac_agent
     from agents.raster_ops_agent import create_raster_ops_agent
     
-    config = get_config()
-    
     agent_configs = {
         "postgis": ("VECTOR_AGENT", create_vector_agent),
         "map_search": ("MAPS_AGENT", create_map_search_agent),
@@ -127,6 +120,6 @@ def create_single_agent(agent_name: str):
         raise ValueError(f"Unknown agent name: {agent_name}. Available: {list(agent_configs.keys())}")
     
     agent_key, factory = agent_configs[agent_name]
-    client = init_model_client(model=config.get_agent_model(agent_key))
+    client = init_model_client(client_key=agent_key)
     
     return factory(client)

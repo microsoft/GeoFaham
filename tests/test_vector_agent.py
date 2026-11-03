@@ -9,7 +9,6 @@ Run: python -m tests.test_vector_agent
 
 import asyncio
 import json
-from agents.core.config import get_config
 from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 from agents.vector_agent import create_vector_agent, VectorQueryExecutor
@@ -78,11 +77,9 @@ def test_create_agent():
     print("Testing create_vector_agent()")
     print("=" * 60)
     
-    config = get_config()
-    model = config.get_agent_model("VECTOR_AGENT")
-    print(f"Using model: {model}")
+    print("Using model client: VECTOR_AGENT")
     
-    client = init_model_client(model=model)
+    client = init_model_client(client_key="VECTOR_AGENT")
     agent = create_vector_agent(client, AGENT_NAMES["VECTOR_AGENT"])
     
     print(f"✓ Agent created: {agent.name}")
@@ -96,8 +93,7 @@ async def test_agent_tool_call():
     print("Testing agent tool call (execute_query)")
     print("=" * 60)
     
-    config = get_config()
-    client = init_model_client(model=config.get_agent_model("VECTOR_AGENT"))
+    client = init_model_client(client_key="VECTOR_AGENT")
     agent = create_vector_agent(client, AGENT_NAMES["VECTOR_AGENT"])
     
     # Find the execute_query tool

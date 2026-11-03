@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 import geopandas as gpd
 import pandas as pd
+from pyproj import Geod
+from shapely.ops import orient
 
 from agents.core.logging import get_logger
 
@@ -152,10 +154,12 @@ def analyze_geojson_features(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Area stats for polygons
     if any(gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])):
         try:
-            gdf_proj = gdf.to_crs(epsg=3857)
-            gdf_proj['poly_area_m2'] = gdf_proj.area
-            analysis['poly_average_area_m2'] = gdf_proj['poly_area_m2'].mean()
-            analysis['poly_total_area_m2'] = gdf_proj['poly_area_m2'].sum()
+            polygons = gdf.geometry[gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
+            geod = Geod(ellps="WGS84")
+            # Orient rings so holes subtract and multipolygon parts cannot cancel.
+            areas = polygons.map(lambda geom: abs(geod.geometry_area_perimeter(orient(geom))[0]))
+            analysis['poly_average_area_m2'] = float(areas.mean())
+            analysis['poly_total_area_m2'] = float(areas.sum())
         except Exception as e:
             logger.warning(f"Failed to compute area stats: {e}")
     

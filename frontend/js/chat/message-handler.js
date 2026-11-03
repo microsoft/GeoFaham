@@ -23,7 +23,7 @@ const MessageHandler = {
         
         // Handle error messages
         if (message.type === 'error') {
-            ChatUI.displayMessage(message.data, 'error');
+            ChatUI.displayMessage(message.error_message || message.data || 'An unknown error occurred.', 'error');
             ChatUI.enableInput();
             return;
         }

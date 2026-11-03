@@ -8,6 +8,7 @@ Raster I/O utilities for writing results as COG and GeoJSON files.
 import os
 import uuid
 import numpy as np
+import rasterio
 import xarray as xr
 import geopandas as gpd
 import dask.array as dask_array
@@ -19,6 +20,18 @@ from agents.core.config import get_config
 _config = get_config()
 QUERY_JSONS_PATH = str(_config.paths.export_dir)
 os.makedirs(QUERY_JSONS_PATH, exist_ok=True)
+
+
+def read_raster_metadata(path: str) -> dict:
+    with rasterio.open(path) as raster:
+        return {
+            "crs": raster.crs.to_string() if raster.crs else None,
+            "bounds": list(raster.bounds),
+            "resolution": list(raster.res),
+            "band_count": raster.count,
+            # Preserve unknown descriptions as null rather than inventing band names.
+            "bands": list(raster.descriptions),
+        }
 
 
 def is_computed(da: xr.DataArray) -> bool:
@@ -37,12 +50,7 @@ def get_bounds(raster_computed: xr.DataArray) -> tuple:
         Tuple of (minx, miny, maxx, maxy) in EPSG:4326
     """
     src_crs = raster_computed.rio.crs
-    bounds_native = (
-        float(raster_computed.x.min()), 
-        float(raster_computed.y.min()),
-        float(raster_computed.x.max()), 
-        float(raster_computed.y.max())
-    )
+    bounds_native = raster_computed.rio.bounds()
     
     if src_crs is not None and src_crs.to_epsg() != 4326:
         bounds_4326 = transform_bounds(src_crs, "EPSG:4326", *bounds_native)
@@ -110,6 +118,15 @@ def compute_stats(da: xr.DataArray) -> dict:
     }
 
 
+def _normalize_nodata(result: xr.DataArray) -> xr.DataArray:
+    if np.issubdtype(result.dtype, np.floating):
+        nodata = result.rio.nodata
+        if nodata is None:
+            nodata = np.nan
+        return result.where(np.isfinite(result), nodata).rio.write_nodata(nodata)
+    return result
+
+
 async def write_result_as_cog(result: xr.DataArray, output_name: str) -> str:
     """
     Write xarray DataArray result as Cloud-Optimized GeoTIFF.
@@ -125,6 +142,8 @@ async def write_result_as_cog(result: xr.DataArray, output_name: str) -> str:
     
     if "time" in result.dims and result.sizes["time"] > 1:
         result = result.isel(time=0).drop_vars("time")
+
+    result = _normalize_nodata(result)
 
     result.rio.to_raster(
         output_path,
@@ -178,6 +197,7 @@ def save_intermediate_layer(layer, base_name: str, layer_key: str = "") -> str:
             print(f"Layer {base_name}{suffix} has no CRS, skipping save")
             return None
         
+        layer = _normalize_nodata(layer)
         layer.rio.to_raster(save_path, driver="GTiff", compress="deflate")
         print(f"Saved intermediate raster to {save_path}")
         return save_path

@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import aiofiles
+import geopandas as gpd
 
 from agents.core.config import get_config
 from agents.core.constants import GEOMETRY_CATEGORIES, POINT_TYPES, LINE_TYPES, POLYGON_TYPES
@@ -178,6 +179,10 @@ async def results_to_geojson(
         for feat in features 
         if feat.get('geometry')
     })
+
+    bounds = stats.get("bounding_box") if stats else None
+    if bounds is None and features:
+        bounds = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326").total_bounds.tolist()
     
     artifact = SavedArtifact(
         path=file_path,
@@ -185,7 +190,8 @@ async def results_to_geojson(
         bytes=os.path.getsize(file_path),
         stats=stats,
         property_keys=property_keys,
-        geom_types=geom_types
+        geom_types=geom_types,
+        metadata={"crs": "EPSG:4326", "bounds": bounds or []},
     )
     
     return artifact

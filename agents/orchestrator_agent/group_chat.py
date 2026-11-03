@@ -30,6 +30,7 @@ class GeoFahamGroupChatConfig(BaseModel):
     description: str | None = None
     participants: List[ComponentModel]
     model_client: ComponentModel
+    model_client2: ComponentModel | None = None
     termination_condition: ComponentModel | None = None
     max_turns: int | None = None
     max_stalls: int
@@ -50,7 +51,8 @@ class GeoFahamGroupChat(BaseGroupChat, Component[GeoFahamGroupChatConfig]):
 
     Args:
         participants (List[ChatAgent]): The participants in the group chat.
-        model_client (ChatCompletionClient): The model client used for generating responses.
+        model_client (ChatCompletionClient): Planner and final-synthesis model client.
+        model_client2 (ChatCompletionClient, optional): Progress-tracking client; defaults to model_client.
         termination_condition (TerminationCondition, optional): The termination condition for the group chat. Defaults to None.
             Without a termination condition, the group chat will run based on the orchestrator logic or until the maximum number of turns is reached.
         max_turns (int, optional): The maximum number of turns in the group chat before stopping. Defaults to 20.
@@ -261,6 +263,7 @@ class GeoFahamGroupChat(BaseGroupChat, Component[GeoFahamGroupChatConfig]):
             description=self.description,
             participants=participants,
             model_client=self._model_client.dump_component(),
+            model_client2=self._model_client2.dump_component(),
             termination_condition=termination_condition,
             max_turns=self._max_turns,
             max_stalls=self._max_stalls,
@@ -272,6 +275,7 @@ class GeoFahamGroupChat(BaseGroupChat, Component[GeoFahamGroupChatConfig]):
     def _from_config(cls, config: GeoFahamGroupChatConfig) -> Self:
         participants = [ChatAgent.load_component(participant) for participant in config.participants]
         model_client = ChatCompletionClient.load_component(config.model_client)
+        model_client2 = ChatCompletionClient.load_component(config.model_client2) if config.model_client2 else model_client
         termination_condition = (
             TerminationCondition.load_component(config.termination_condition) if config.termination_condition else None
         )
@@ -280,6 +284,7 @@ class GeoFahamGroupChat(BaseGroupChat, Component[GeoFahamGroupChatConfig]):
             name=config.name,
             description=config.description,
             model_client=model_client,
+            model_client2=model_client2,
             termination_condition=termination_condition,
             max_turns=config.max_turns,
             max_stalls=config.max_stalls,

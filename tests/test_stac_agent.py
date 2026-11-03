@@ -9,8 +9,6 @@ Run: python -m tests.test_stac_agent
 
 import asyncio
 import json
-from agents.core.config import get_config
-from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 from agents.stac_agent.assistant import create_stac_agent
 from agents.stac_agent.tools import get_collection_details
@@ -38,11 +36,9 @@ def test_create_agent():
     print("Testing create_stac_agent()")
     print("=" * 60)
     
-    config = get_config()
-    model = config.get_agent_model("STAC_AGENT")
-    print(f"Using model: {model}")
+    print("Using model client: STAC_AGENT")
     
-    client = init_model_client(model=model)
+    client = init_model_client(client_key="STAC_AGENT")
     agent = create_stac_agent(client)
     
     print(f"✓ Agent created: {agent.name}")

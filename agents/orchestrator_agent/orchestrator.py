@@ -57,9 +57,10 @@ from agents.orchestrator_agent._prompts import (
     ORCHESTRATOR_TASK_LEDGER_PLAN_UPDATE_PROMPT,
 )
 from ._prompt_progress import ORCHESTRATOR_PROGRESS_LEDGER_PROMPT, LedgerEntry
-from pydantic import Field
+from pydantic import BaseModel, Field
 from agents.core.types import GeoFahamToolResponse
 from agents.core.response_store import get_response_store
+from agents.shared.responses import validate_response_artifacts
 from agents.core.config import get_config
 
 trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
@@ -85,12 +86,18 @@ AGENT_PLACEHOLDERS = {
 }
 
 
+class TaskFacts(BaseModel):
+    facts: str = Field(min_length=1)
+    clarification_question: str
+
+
 class GeoFahamOrchestratorState(BaseGroupChatManagerState):
     """State for GeoFaham orchestrator."""
 
     task: str = Field(default="")
     facts: str = Field(default="")
     plan: str = Field(default="")
+    clarification_question: str = Field(default="")
     n_rounds: int = Field(default=0)
     n_stalls: int = Field(default=0)
     response_store_data: Dict[str, Any] = Field(default_factory=dict)
@@ -132,17 +139,19 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
             message_factory,
             emit_team_events=emit_team_events,
         )
-        self._model_client = model_client
-        self._model_client2 = model_client2
+        self._planner_client = model_client
+        self._progress_client = model_client2
         self._max_stalls = max_stalls
         self._final_answer_prompt = final_answer_prompt
         self._max_json_retries = 10
         self._task = ""
         self._facts = ""
         self._plan = ""
+        self._clarification_question = ""
         self._n_rounds = 0
         self._n_stalls = 0
         self._user_text_msg = ""
+        self._temporal_mode = None
         self._agent_responses = {}
         
         # Initialize the response store (shared across all agents)
@@ -196,6 +205,27 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
     async def _log_message(self, log_message: str) -> None:
         trace_logger.debug(log_message)
 
+    async def _read_task_facts(self, context: List[LLMMessage], cancellation_token: CancellationToken) -> None:
+        kwargs = {"cancellation_token": cancellation_token}
+        if self._planner_client.model_info.get("structured_output", False):
+            kwargs["json_output"] = TaskFacts
+        elif self._planner_client.model_info.get("json_output", False):
+            kwargs["json_output"] = True
+        for _ in range(self._max_json_retries):
+            response = await self._planner_client.create(self._get_compatible_context(context), **kwargs)
+            try:
+                objects = extract_json_from_str(response.content)
+                if len(objects) != 1:
+                    raise ValueError("Expected one task-facts JSON object")
+                facts = TaskFacts.model_validate(objects[0], strict=True)
+                self._facts = facts.facts
+                self._clarification_question = facts.clarification_question.strip()
+                return
+            except (ValueError, TypeError) as error:
+                context.append(AssistantMessage(content=response.content, source=self._name))
+                context.append(UserMessage(content=f"Invalid task-facts response: {error}. Return facts and clarification_question as strings.", source=self._name))
+        raise ValueError("Could not obtain valid task facts; no workflow was dispatched")
+
     @rpc
     async def handle_start(self, message: GroupChatStart, ctx: MessageContext) -> None:  # type: ignore
         """Handle the start of a task."""
@@ -225,6 +255,7 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         # Create the initial task ledger
         # Combine all message contents for task
 
+        self._temporal_mode = None
         self._task = " ".join([msg.to_model_text() for msg in message.messages])
         self._user_text_msg = self._task.split("User_JSON_START")[0].strip()
         self._extract_user_json()
@@ -234,13 +265,12 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         planning_conversation.append(
             UserMessage(content=self._get_task_ledger_facts_prompt(self._task), source=self._name)
         )
-        response = await self._model_client.create(
-            self._get_compatible_context(planning_conversation), cancellation_token=ctx.cancellation_token
-        )
-
-        assert isinstance(response.content, str)
-        self._facts = response.content
-        # self._plan = self._facts
+        await self._read_task_facts(planning_conversation, ctx.cancellation_token)
+        if self._clarification_question:
+            self._plan = "Awaiting required user clarification."
+            self._n_stalls = 0
+            await self._reenter_outer_loop(ctx.cancellation_token)
+            return
         planning_conversation.append(AssistantMessage(content=self._facts, source=self._name))
 
         # 2. CREATE A PLAN
@@ -248,7 +278,7 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         planning_conversation.append(
             UserMessage(content=self._get_task_ledger_plan_prompt(self._task, self._team_description, self._facts), source=self._name)
         )
-        response = await self._model_client2.create(
+        response = await self._planner_client.create(
             self._get_compatible_context(planning_conversation), cancellation_token=ctx.cancellation_token
         )
 
@@ -258,9 +288,9 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         # Kick things off
         self._n_stalls = 0
         await self._reenter_outer_loop(ctx.cancellation_token)
-    def _extract_user_json(self):
+    def _extract_user_json(self, text=None):
         pattern = r"User_JSON_START\s*(.*?)\s*User_JSON_END"
-        matches = re.finditer(pattern, self._task, re.DOTALL)
+        matches = re.finditer(pattern, self._task if text is None else text, re.DOTALL)
 
         for match in matches:
             response_json_str = match.group(1).strip()
@@ -282,6 +312,8 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
                 if should_stop == "stop":
                     return
             else:
+                if message.response.chat_message.source == AGENT_NAMES['USER_PROXY']:
+                    self._extract_user_json(message.response.chat_message.content)
                 tool_response = None 
                 tool_response_sample = None
                 delta: List[BaseAgentEvent | BaseChatMessage] = []
@@ -296,12 +328,11 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
                                     try:
                                         tool_response = GeoFahamToolResponse.model_validate_json(item.content)
                                         tool_response_sample = item.content[:100]
+                                        self._agent_responses[tool_response.response_id] = tool_response
+                                        self._response_store.store(tool_response, step_number=self._n_rounds)
                                     except Exception:
                                         pass
                         delta.append(inner_message)
-                if tool_response is not None:
-                    self._agent_responses[tool_response.response_id] = tool_response
-                    self._response_store.store(tool_response, step_number=self._n_rounds)
                 if tool_response is not None and tool_response_sample is not None and tool_response_sample not in message.response.chat_message.content:
                     message.response.chat_message.content = f"Response: {tool_response} \n \n Summary: {message.response.chat_message.content}"
                 await self.update_message_thread([message.response.chat_message])
@@ -317,6 +348,18 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
                         await self._signal_termination(stop_message)
                         return
 
+            if (isinstance(message, GroupChatAgentResponse)
+                    and message.response.chat_message.source == AGENT_NAMES['USER_PROXY']
+                    and self._clarification_question):
+                reply = message.response.chat_message.content
+                self._task += f"\nClarification question: {self._clarification_question}\nUser clarification: {reply}"
+                self._user_text_msg += f"\nUser clarification: {reply.split('User_JSON_START')[0].strip()}"
+                self._is_continuation = True
+                self._temporal_mode = None
+                self._n_stalls = 0
+                await self._update_task_ledger(ctx.cancellation_token)
+                await self._reenter_outer_loop(ctx.cancellation_token)
+                return
             await self._orchestrate_step(ctx.cancellation_token)
         except Exception as e:
             error = SerializableException.from_exception(e)
@@ -337,19 +380,18 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
                             try:
                                 tool_response = GeoFahamToolResponse.model_validate_json(item.content)
                                 tool_response_sample = item.content[:100]
+                                self._agent_responses[tool_response.response_id] = tool_response
+                                self._response_store.store(tool_response, step_number=self._n_rounds)
                             except Exception:
                                 pass
                 delta.append(inner_message)
-        if tool_response is not None:
-            self._agent_responses[tool_response.response_id] = tool_response
-            self._response_store.store(tool_response, step_number=self._n_rounds)
         summary_msg = message.result.messages[-1] if isinstance(message.result.messages[-1], ToolCallSummaryMessage) else None
         if summary_msg is not None:
-            if tool_response_sample not in summary_msg.content and tool_response is not None:
-                summary_msg = f"Response: {tool_response} \n \n Summary: {summary_msg}"
+            if tool_response is not None and tool_response_sample not in summary_msg.content:
+                summary_msg.content = f"Response: {tool_response} \n \n Summary: {summary_msg.content}"
             await self.update_message_thread([summary_msg])
         elif tool_response is not None:
-            await self.update_message_thread([tool_response])
+            await self.update_message_thread([TextMessage(content=tool_response.model_dump_json(), source=tool_response.source)])
         else:
             await self.update_message_thread(message.result.messages)
 
@@ -371,6 +413,7 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
             task=self._task,
             facts=self._facts,
             plan=self._plan,
+            clarification_question=self._clarification_question,
             n_rounds=self._n_rounds,
             n_stalls=self._n_stalls,
             response_store_data=self._response_store.to_dict(),
@@ -384,9 +427,15 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         self._task = orchestrator_state.task
         self._facts = orchestrator_state.facts
         self._plan = orchestrator_state.plan
+        self._clarification_question = orchestrator_state.clarification_question
         self._n_rounds = orchestrator_state.n_rounds
         self._n_stalls = orchestrator_state.n_stalls
+        uploads = [response for response in self._response_store.get_by_source('user')
+                   if (response.metadata or {}).get('uploaded_file')]
         self._response_store.from_dict(orchestrator_state.response_store_data)
+        for response in uploads:
+            if self._response_store.get_or_none(response.response_id) is None:
+                self._response_store.store(response)
         self._agent_responses = {resp.response_id: resp for resp in self._response_store.get_all()}
 
     async def select_speaker(self, thread: Sequence[BaseAgentEvent | BaseChatMessage]) -> List[str] | str:
@@ -403,7 +452,9 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         self._task = ""
         self._facts = ""
         self._plan = ""
+        self._clarification_question = ""
         self._response_store.clear()
+        self._agent_responses.clear()
         self._is_continuation = False
 
     async def _reenter_outer_loop(self, cancellation_token: CancellationToken) -> None:
@@ -458,6 +509,10 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
             return
         self._n_rounds += 1
 
+        if self._clarification_question:
+            await self._request_user_clarification(cancellation_token)
+            return
+
         # Update the progress ledger
         context = self._thread_to_context()
 
@@ -468,109 +523,102 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         context.append(UserMessage(content=progress_ledger_prompt, source=self._name))
         progress_ledger: Dict[str, Any] = {}
         assert self._max_json_retries > 0
-        key_error: bool = False
         schema_error = None
-        available_ids = list(self._agent_responses.keys()) if self._agent_responses else []
+        available_ids = list(self._agent_responses)
         for _ in range(self._max_json_retries):
             if schema_error:
-                # If there was a schema error, add that to context
-                context.append(UserMessage(content=f"Your previous output: {ledger_str} \n \n Error: {schema_error}", source=self._name))
-            else:
-                context.append(UserMessage(content=f"Available response IDs are: {available_ids if available_ids else 'NONE - no agent responses have been recorded yet'}. ", source=self._name))
-            if self._model_client.model_info.get("structured_output", False):
-                response = await self._model_client.create(
-                    self._get_compatible_context(context), json_output=LedgerEntry
-                )
-            elif self._model_client.model_info.get("json_output", False):
-                response = await self._model_client.create(
-                    self._get_compatible_context(context), cancellation_token=cancellation_token, json_output=True
-                )
-            else:
-                response = await self._model_client.create(
-                    self._get_compatible_context(context), cancellation_token=cancellation_token
-                )
-            ledger_str = response.content
-            try:
-                assert isinstance(ledger_str, str)
-                output_json = extract_json_from_str(ledger_str)
-                if len(output_json) != 1:
-                    raise ValueError(
-                        f"Progress ledger should contain a single JSON object, but found: {len(progress_ledger)}"
-                    )
-                progress_ledger = output_json[0]
-                print("progress_ledger:", progress_ledger)
-                
-                # Send the progress ledger to output topic only (for logging/monitoring)
-                ledger_message_output = TextMessage(
-                    content=json.dumps(progress_ledger, indent=2),
+                context.append(UserMessage(
+                    content=f"Your previous ledger was rejected: {schema_error}. "
+                    "Correct the failed step or select a recovery action; do not claim completion.",
                     source=self._name,
-                )
-                await self.publish_message(
-                    GroupChatMessage(message=ledger_message_output),
-                    topic_id=DefaultTopicId(type=self._output_topic_type),
-                )
-                await self._output_message_queue.put(ledger_message_output)
-
-                # If the team consists of a single agent, deterministically set the next speaker
-                if len(self._participant_names) == 1:
-                    progress_ledger["next_speaker"] = {
-                        "reason": "The team consists of only one agent.",
-                        "answer": self._participant_names[0],
-                    }
-
-                # Validate the structure
-                required_keys = [
-                    # "validation_checks",
-                    "is_request_satisfied",
-                    "is_progress_being_made",
-                    "is_in_loop",
-                    "instruction_or_question",
-                    "next_speaker",
-                ]
-                # TODO: do we need this as pydantic is handling this?
-                key_error = False
-                for key in required_keys:
-                    if (
-                        key not in progress_ledger
-                        or not isinstance(progress_ledger[key], dict)
-                        or ("answer" not in progress_ledger[key] and key != "instruction_or_question")
-                        or "reason" not in progress_ledger[key]
-                    ):
-                        key_error = True
-                        break
-                    
-                next_inputs_ids = progress_ledger['instruction_or_question'].get("inputs", [])
-                try:
-                    next_inputs = [self._agent_responses[x.strip()].model_dump_json() for x in next_inputs_ids]
-                except Exception as e:
-                    invalid_ids = [x for x in next_inputs_ids if x.strip() not in self._agent_responses]
-                    schema_error = (
-                        f"Invalid input IDs provided: {invalid_ids}. "
-                        f"Available response IDs are: {available_ids if available_ids else 'NONE - no agent responses have been recorded yet'}. "
-                        f"If the required input is not available, the previous step may have failed or not been executed. "
-                        f"Re-evaluate which step to execute next. Do NOT hallucinate response IDs."
-                    )
-                    print(schema_error)
-                    continue
-
-                # Validate the next speaker if the task is not yet complete
-                if (
-                    not progress_ledger["is_request_satisfied"]["answer"]
-                    and progress_ledger["next_speaker"]["answer"] not in self._participant_names
-                ):
-                    key_error = True
+                ))
+            else:
+                context.append(UserMessage(content=f"Available response IDs: {available_ids}", source=self._name))
+            kwargs = {"cancellation_token": cancellation_token}
+            if self._progress_client.model_info.get("structured_output", False):
+                kwargs["json_output"] = LedgerEntry
+            elif self._progress_client.model_info.get("json_output", False):
+                kwargs["json_output"] = True
+            response = await self._progress_client.create(self._get_compatible_context(context), **kwargs)
+            try:
+                output = extract_json_from_str(response.content)
+                if len(output) != 1:
+                    raise ValueError("Expected one progress-ledger JSON object")
+                ledger = LedgerEntry.model_validate(output[0], strict=True)
+                if self._temporal_mode is not None and ledger.temporal_mode != self._temporal_mode:
+                    raise ValueError(f"Preserve the requested temporal mode: {self._temporal_mode}")
+                complete = ledger.is_request_satisfied.answer
+                if ledger.stop_reason.strip():
+                    if complete:
+                        raise ValueError("Stopped work must not be marked satisfied")
+                    ids = ledger.instruction_or_question.inputs
+                    if not ids or any(rid not in self._agent_responses for rid in ids):
+                        raise ValueError("Stopping must reference actual failed tool responses")
+                    if not any(self._agent_responses[rid].type == "error" for rid in ids):
+                        raise ValueError("Stopping requires evidence of a tool error")
+                    progress_ledger = ledger.model_dump()
                     break
-
-                if not key_error:
-                    break
-                await self._log_message(f"Failed to parse ledger information, retrying: {ledger_str}")
-            except (json.JSONDecodeError, TypeError):
-                key_error = True
-                await self._log_message("Invalid ledger format encountered, retrying...")
-                continue
-        if key_error:
-            raise ValueError("Failed to parse ledger information after multiple retries.")
+                if not complete and ledger.next_speaker.answer not in self._participant_names:
+                    raise ValueError(f"Unknown next speaker: {ledger.next_speaker.answer}")
+                checks = ledger.validation_checks
+                if complete or ledger.next_speaker.answer != AGENT_NAMES["USER_PROXY"]:
+                    if not checks.input_validation.can_proceed or not checks.input_validation.data_type_matches:
+                        raise ValueError("Input validation failed; fetch or correct the missing/incompatible inputs")
+                    if not checks.plan_adherence.all_previous_steps_completed:
+                        raise ValueError("Required previous steps are incomplete; execute them first")
+                    if not checks.plan_adherence.required_artifacts_present:
+                        raise ValueError("Required artifacts are missing; execute the producing step first")
+                    if checks.input_validation.missing_inputs:
+                        raise ValueError(f"Missing inputs: {checks.input_validation.missing_inputs}")
+                ids = [rid.strip() for rid in ledger.instruction_or_question.inputs]
+                if complete:
+                    if not ids:
+                        raise ValueError("Completion must reference the responses that provide the final evidence")
+                    if not (checks.output_validation.output_matches_expectation
+                            and checks.output_validation.output_is_usable_for_next_step):
+                        raise ValueError("Final output validation failed; correct the output before completion")
+                next_inputs = []
+                for rid in ids:
+                    if rid not in self._agent_responses:
+                        raise ValueError(f"Unknown response ID {rid}; available IDs: {available_ids}")
+                    artifact_response = self._agent_responses[rid]
+                    # Empty search results can support a final 'none found', but not computation.
+                    if not (complete and artifact_response.type == "empty"):
+                        validate_response_artifacts(artifact_response)
+                    if artifact_response.source == AGENT_NAMES["RASTER_AGENT"]:
+                        metadata = artifact_response.metadata or {}
+                        provenance = metadata.get("metadata", metadata)
+                        if ledger.temporal_mode != "unspecified":
+                            if provenance.get("temporal_mode") != ledger.temporal_mode:
+                                raise ValueError("Raster output does not preserve the requested temporal mode")
+                            if ledger.temporal_mode == "single_scene" and len(provenance.get("acquisition_dates", [])) != 1:
+                                raise ValueError("Single-scene output must identify exactly one acquisition date")
+                    next_inputs.append(artifact_response.model_dump_json())
+                progress_ledger = ledger.model_dump()
+                break
+            except (ValueError, TypeError, KeyError) as error:
+                context.append(AssistantMessage(content=response.content, source=self._name))
+                schema_error = str(error)
+                await self._log_message(f"Rejected progress ledger: {schema_error}")
+        else:
+            await self._prepare_final_answer(
+                f"Execution stopped with incomplete work after invalid progress ledgers: {schema_error}",
+                cancellation_token,
+            )
+            return
+        self._temporal_mode = progress_ledger["temporal_mode"]
+        ledger_message_output = TextMessage(content=json.dumps(progress_ledger, indent=2), source=self._name)
+        await self.publish_message(GroupChatMessage(message=ledger_message_output),
+                                   topic_id=DefaultTopicId(type=self._output_topic_type))
+        await self._output_message_queue.put(ledger_message_output)
         await self._log_message(f"Progress Ledger: {progress_ledger}")
+
+        if progress_ledger["stop_reason"].strip():
+            await self._prepare_final_answer(
+                f"Execution stopped with incomplete work: {progress_ledger['stop_reason']}",
+                cancellation_token,
+            )
+            return
 
         # Check for task completion
         if progress_ledger["is_request_satisfied"]["answer"]:
@@ -597,6 +645,7 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
         next_speaker_message_dict = progress_ledger["instruction_or_question"]
         next_speaker_message = textwrap.dedent(f"""
         **Question**: {next_speaker_message_dict.get("instruction", "")}  NO RAW Geometric Coordinates.
+        **Temporal mode**: {self._temporal_mode} (pass this as temporal_mode to raster execution).
         
         **Context**: {next_speaker_message_dict.get("context", "")}
         
@@ -655,29 +704,43 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
             )
             await self._output_message_queue.put(select_msg)
 
+    async def _request_user_clarification(self, cancellation_token: CancellationToken) -> None:
+        speaker = AGENT_NAMES["USER_PROXY"]
+        if speaker not in self._participant_name_to_topic_type:
+            await self._prepare_final_answer(f"Required user clarification: {self._clarification_question}", cancellation_token)
+            return
+        message = TextMessage(content=self._clarification_question, source=self._name)
+        await self.update_message_thread([message])
+        await self.publish_message(GroupChatMessage(message=message), topic_id=DefaultTopicId(type=self._output_topic_type))
+        await self._output_message_queue.put(message)
+        topic = DefaultTopicId(type=self._participant_name_to_topic_type[speaker])
+        await self.publish_message(GroupChatAgentResponse(response=Response(chat_message=message), name=self._name),
+                                   topic_id=topic, cancellation_token=cancellation_token)
+        await self.publish_message(GroupChatRequestPublish(), topic_id=topic, cancellation_token=cancellation_token)
+
     async def _update_task_ledger(self, cancellation_token: CancellationToken) -> None:
         """Update the task ledger (outer loop) with the latest facts and plan."""
         context = self._thread_to_context()
+        clarifying = bool(self._clarification_question)
 
         # Update the facts
         update_facts_prompt = self._get_task_ledger_facts_update_prompt(self._task, self._facts)
         context.append(UserMessage(content=update_facts_prompt, source=self._name))
 
-        response = await self._model_client.create(
-            self._get_compatible_context(context), cancellation_token=cancellation_token
-        )
-
-        assert isinstance(response.content, str)
-        self._facts = response.content
+        await self._read_task_facts(context, cancellation_token)
+        if self._clarification_question:
+            self._plan = "Awaiting required user clarification."
+            return
         context.append(AssistantMessage(content=self._facts, source=self._name))
 
         # Update the plan - now includes full planning guidance
-        update_plan_prompt = self._get_task_ledger_plan_update_prompt(
-            self._task, self._team_description, self._facts
-        )
+        if clarifying:
+            update_plan_prompt = self._get_task_ledger_plan_prompt(self._task, self._team_description, self._facts)
+        else:
+            update_plan_prompt = self._get_task_ledger_plan_update_prompt(self._task, self._team_description, self._facts)
         context.append(UserMessage(content=update_plan_prompt, source=self._name))
 
-        response = await self._model_client2.create(
+        response = await self._planner_client.create(
             self._get_compatible_context(context), cancellation_token=cancellation_token
         )
 
@@ -690,9 +753,10 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
 
         # Get the final answer
         final_answer_prompt = self._get_final_answer_prompt(self._task)
+        final_answer_prompt += f"\nExecution status: {reason}\nReport unmet requirements and failed validation explicitly. Do not describe missing artifacts as available."
         context.append(UserMessage(content=final_answer_prompt, source=self._name))
 
-        response = await self._model_client.create(
+        response = await self._planner_client.create(
             self._get_compatible_context(context), cancellation_token=cancellation_token
         )
         assert isinstance(response.content, str)
@@ -738,7 +802,7 @@ class GeoFahamOrchestrator(BaseGroupChatManager):
     
     def _get_compatible_context(self, messages: List[LLMMessage]) -> List[LLMMessage]:
         """Ensure that the messages are compatible with the underlying client, by removing images if needed."""
-        if self._model_client.model_info["vision"]:
+        if self._planner_client.model_info["vision"] and self._progress_client.model_info["vision"]:
             return messages
         else:
             return remove_images(messages)

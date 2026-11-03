@@ -4,6 +4,7 @@
 """
 WebSocket routes - main chat handler and user GeoJSON processing.
 """
+import asyncio
 import json
 import logging
 import time
@@ -26,6 +27,7 @@ from agents.core.response_store import get_response_store
 from agents.shared.geojson import generate_response_id, results_to_geojson
 from backend.routes.config import TEAM_STATE_PATH, CONVERSATION_HISTORY_PATH
 from backend.routes.history import get_history
+from backend.services.chat_tasks import active_chat_tasks
 from backend.routes.utils import clusters2bounds
 
 logger = logging.getLogger(__name__)
@@ -119,19 +121,26 @@ class MessageProcessor:
             response.data = parsed.get('data', [])
         else:
             response.data = parsed.get('data', {})
+
+        if response.type == 'layer' and response.data_type in ('vector', 'timeline') and response.data is None:
+            response.type = 'error'
+            response.error_message = "Could not read or parse the output GeoJSON file."
         
         return response
     
     @staticmethod
-    async def _load_vector_layer(artifact: dict) -> dict | None:
+    async def _load_vector_layer(artifact: dict | None) -> dict | None:
         """Load GeoJSON from artifact path."""
-        path = artifact.get('path')
+        path = (artifact or {}).get('path')
         if not path:
             return None
         
         try:
             async with aiofiles.open(path, 'r') as f:
-                return json.loads(await f.read())
+                data = json.loads(await f.read())
+                if not isinstance(data, dict) or data.get('type') != 'FeatureCollection' or not isinstance(data.get('features'), list):
+                    raise ValueError("Output is not a GeoJSON FeatureCollection")
+                return data
         except Exception as e:
             logger.error(f"Error reading vector layer: {e}")
             return None
@@ -181,6 +190,7 @@ class ChatSession:
         self.mode = mode if mode in VALID_MODES else "multi-agent"
         self.team = None
         self.history = []
+        self.cancellation_token = None
     
     async def initialize(self):
         """Initialize the chat session - create team once."""
@@ -194,6 +204,7 @@ class ChatSession:
     async def _user_input(self, prompt: str, cancellation_token: CancellationToken | None) -> str:
         """Callback for when agent requests user input."""
         data = await self.websocket.receive_json()
+        data = await prepare_user_message(data)
         message = TextMessage.model_validate(data)
         return message.content
     
@@ -203,18 +214,18 @@ class ChatSession:
     
     async def process_message(self, data: dict) -> AsyncIterator[APIResponse]:
         """Process a single user message and yield responses."""
-        # Handle user raw JSON upload
-        if data.get("user_raw_json", ""):
-            user_raw_geojson_path = await save_user_raw_geojson(data.get("user_raw_json"))
-            data.pop("user_raw_json")
-            data['content'] += f"\n\n User_JSON_START {user_raw_geojson_path} User_JSON_END"
+        data = await prepare_user_message(data)
         
         request = TextMessage.model_validate(data)
         
         start_time = time.time()
         total_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
         
-        async for message in self.team.run_stream(task=request):
+        self.cancellation_token = CancellationToken()
+        task = asyncio.current_task()
+        if task in active_chat_tasks:
+            active_chat_tasks[task] = self.cancellation_token
+        async for message in self.team.run_stream(task=request, cancellation_token=self.cancellation_token):
             logger.debug(f"Message: {message}")
             
             # Track history and usage
@@ -273,6 +284,19 @@ class ChatSession:
 # HELPER FUNCTIONS
 # =============================================================================
 
+async def prepare_user_message(data: dict) -> dict:
+    """Attach user geometry and uploaded files to the actual agent request."""
+    data = dict(data)
+    raw = data.pop('user_raw_json', '')
+    if raw:
+        response = await save_user_raw_geojson(raw)
+        data['content'] += f"\nUser_JSON_START\n{response}\nUser_JSON_END"
+    for response in get_response_store().get_by_source('user'):
+        if (response.metadata or {}).get('uploaded_file'):
+            data['content'] += f"\nUser_JSON_START\n{response.model_dump_json()}\nUser_JSON_END"
+    return data
+
+
 async def save_user_raw_geojson(data: str) -> str:
     """Process and save user-uploaded raw GeoJSON data."""
     geojson_result = json.loads(data)
@@ -307,12 +331,14 @@ async def chat(websocket: WebSocket, mode: str = "multi-agent"):
     await websocket.accept()
     
     session = ChatSession(websocket, mode)
+    task = asyncio.current_task()
+    active_chat_tasks[task] = None
     
     try:
         # Send immediate status so the connection is not idle during init
         await websocket.send_json({"type": "status", "data": "Initializing agents...", "source": "system", "finished": False, "debug_msg": True})
         await session.initialize()
-        await websocket.send_json({"type": "status", "data": "Agents ready.", "source": "system", "finished": False, "debug_msg": True})
+        await websocket.send_json({"type": "status", "data": "Agents ready.", "ready": True, "source": "system", "finished": False, "debug_msg": True})
         
         while True:
             # Wait for user message
@@ -348,12 +374,21 @@ async def chat(websocket: WebSocket, mode: str = "multi-agent"):
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.exception("Chat session failed")
         try:
             await session.send_response(APIResponse(
                 type='error',
                 error_message=f"Unexpected error: {str(e)}",
                 source='system'
             ))
+            await websocket.close(code=1011)
         except Exception:
             pass  # Client already disconnected
+    finally:
+        active_chat_tasks.pop(task, None)
+        if session.cancellation_token is not None:
+            session.cancellation_token.cancel()
+        try:
+            await websocket.close(code=1012)
+        except RuntimeError:
+            pass

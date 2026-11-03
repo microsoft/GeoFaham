@@ -132,11 +132,14 @@ Database   Nominatim  Computer  Executor
 
 ## Quick Start
 
+Model clients use `GEOFAHAM_*_MODEL_CLIENT` component settings. See
+[configuration](docs/CONFIGURATION.md) for credentials and per-agent overrides.
+
 ### Prerequisites
 
 - Python 3.11+
 - PostgreSQL with PostGIS extension
-- Azure OpenAI API access
+- API access for your configured models
 - (Optional) Local Nominatim/Overpass for OSM queries
 
 ### Installation
@@ -163,8 +166,13 @@ cp .env.example .env
 Edit `.env` with your settings:
 
 ```bash
-# Azure OpenAI (required)
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+# Models (OpenAI example; see configuration for Azure and other providers)
+OPENAI_API_KEY=your_api_key
+GEOFAHAM_DEFAULT_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.OpenAIChatCompletionClient","config":{"model":"gpt-4o","api_key":"$OPENAI_API_KEY"}}'
+GEOFAHAM_REASONING_MODEL_CLIENT='{"provider":"autogen_ext.models.openai.OpenAIChatCompletionClient","config":{"model":"gpt-5.1","api_key":"$OPENAI_API_KEY","reasoning_effort":"medium"}}'
+
+# Azure Maps (loaded by the frontend through /api/config)
+AZURE_MAPS_KEY=your_maps_key
 
 # PostgreSQL (required for vector_agent)
 POSTGRES_HOST=localhost
@@ -172,10 +180,6 @@ POSTGRES_PORT=5432
 POSTGRES_DB=geofaham
 POSTGRES_USER=your_user
 POSTGRES_PASSWORD=your_password
-
-# Model configuration
-GEOFAHAM_DEFAULT_MODEL=gpt-4o
-GEOFAHAM_REASONING_MODEL=gpt-5.1
 ```
 
 ### Running the Server
@@ -228,31 +232,25 @@ python -m tests.tool_test --agent maps --tool get_address_coordinates
 ### Python API
 
 ```python
-from agents import get_team
-from agents.core.config import get_config
-from agents.base.client import init_model_client
-
-# Create a single agent
-from agents.vector_agent import create_vector_agent
-
-config = get_config()
-client = init_model_client(model=config.get_agent_model("VECTOR_AGENT"))
-agent = create_vector_agent(client)
-
-# Create the full team
-async def main():
-    async def user_input(prompt, token=None):
-        return input(prompt)
-    
-    team = await get_team(user_input)
-    
-    # Run a query
-    from autogen_agentchat.ui import Console
-    stream = team.run_stream(task="Find all bridges in St. Louis, MO")
-    await Console(stream)
-
 import asyncio
-asyncio.run(main())
+
+from dotenv import load_dotenv
+from autogen_agentchat.ui import Console
+
+
+async def main():
+    load_dotenv()
+    from agents import get_team
+
+    async def user_input(prompt, cancellation_token=None):
+        return await asyncio.to_thread(input, prompt)
+
+    team = await get_team(user_input)
+    await Console(team.run_stream(task="Find bridges in St. Louis, Missouri."))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ## API Reference
@@ -304,28 +302,21 @@ asyncio.run(main())
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AZURE_OPENAI_ENDPOINT` | ✅ | - | Azure OpenAI endpoint |
+| `AZURE_MAPS_KEY` | ✅ for map | - | Azure Maps subscription key |
 | `POSTGRES_HOST` | ✅ | localhost | PostgreSQL host |
 | `POSTGRES_DB` | ✅ | geofaham | Database name |
 | `POSTGRES_USER` | ✅ | - | Database user |
 | `POSTGRES_PASSWORD` | ✅ | - | Database password |
-| `GEOFAHAM_DEFAULT_MODEL` | ❌ | gpt-4o | Model for simple agents |
-| `GEOFAHAM_REASONING_MODEL` | ❌ | gpt-5.1 | Model for complex agents |
+| `GEOFAHAM_DEFAULT_MODEL_CLIENT` | ✅ unless overridden | - | Model-client component for Maps and STAC |
+| `GEOFAHAM_REASONING_MODEL_CLIENT` | ✅ unless overridden | - | Model-client component for Vector, Raster, and Orchestrator |
 | `GEOFAHAM_BASE_DIR` | ❌ | ./runtime | Runtime artifacts directory |
 | `GEOFAHAM_DATA_DIR` | ❌ | ./data | Static data directory |
 
 ### Model Configuration
 
-Per-agent model overrides via environment variables:
-
-```bash
-GEOFAHAM_VECTOR_AGENT_MODEL=gpt-5.1
-GEOFAHAM_MAPS_AGENT_MODEL=gpt-4o
-GEOFAHAM_STAC_AGENT_MODEL=gpt-4o
-GEOFAHAM_RASTER_AGENT_MODEL=gpt-5.1
-GEOFAHAM_ORCHESTRATOR_PLANNER_MODEL=gpt-5.1
-GEOFAHAM_ORCHESTRATOR_PROGRESS_MODEL=gpt-4o
-```
+Per-agent overrides use complete component configurations. See
+[configuration](docs/CONFIGURATION.md#role-overrides) for role names, Azure
+settings, and other providers.
 
 ## Development
 

@@ -20,8 +20,11 @@ def build_system_prompt(schema_info: str, disasters_list: str) -> str:
     ).replace("{current_date}", CURRENT_DATE)
 
 
-SYSTEM_PROMPT = """You are a spatial analysis agent for a PostGIS disaster database.
-Generate and execute SQL queries for disaster data, building damage, and flood maps.
+SYSTEM_PROMPT = """You are the Vector Agent (postgis_agent) for vector spatial analysis using PostGIS.
+Generate and execute SQL for disaster data AND external GeoJSON from Maps or users.
+External-only clipping, intersections, buffers, distances, lengths, areas, and statistics
+do not require a disaster or a join to database tables. Use execute_query_with_geojson
+with the supplied response IDs for those operations.
 
 Current Date: {current_date}
 
@@ -43,7 +46,7 @@ CORE CAPABILITIES
 2. **Building Damage** - Damage percentages, categories, spatial patterns
 3. **Flood Maps** - Flood extent, affected areas
 4. **Spatial Operations** - Intersections, buffers, clustering, distance filters
-5. **External GeoJSON Joins** - Combine DB data with user-provided boundaries/POIs
+5. **External GeoJSON Analysis** - Process Maps/user layers alone or join them with DB data
 
 ================================================================================
 COORDINATE REFERENCE SYSTEM (CRS)
@@ -55,9 +58,16 @@ COORDINATE REFERENCE SYSTEM (CRS)
 - No CRS transformation needed for spatial joins between DB and GeoJSON
 
 **For distance-based operations (meters):**
-- Transform to a projected CRS for accurate distance calculations
-- Example: `ST_Transform(geom, 3857)` for Web Mercator (meters)
-- Use for: ST_DWithin, ST_Buffer, ST_ClusterDBSCAN eps parameter
+- Use WGS84 ellipsoidal calculations by default:
+  - Distance: `ST_Distance(a.geom::geography, b.geom::geography)` (meters).
+  - Distance filter: `ST_DWithin(a.geom::geography, b.geom::geography, distance_m)`.
+  - Line length: `ST_Length(geom::geography)` (meters).
+  - Polygon area: `ST_Area(geom::geography)` (square meters).
+- Do not use `ST_DistanceSphere` or disable spheroid calculations for exact distances.
+  Use a spherical approximation only if explicitly requested, and label it as approximate.
+- For buffering, prefer create_buffer, which uses a local UTM projection.
+- For operations requiring planar geometry, choose one suitable local metric CRS for
+  the analysis extent. Web Mercator (EPSG:3857) is for display, not accurate measurements.
 
 ================================================================================
 QUERY GENERATION RULES
@@ -91,15 +101,24 @@ FROM building_damage_assessment
 **Clustering Queries:**
 - Use ST_ClusterDBSCAN for spatial clustering
 - Always include `cluster_id` in output
-- Transform to projected CRS (e.g., 3857) for distance-based clustering
-- Each cluster should be a Polygon
+- Transform to one appropriate local metric CRS for distance-based clustering
+- For a hotspot layer, aggregate each non-noise cluster into a polygon and include its building count.
+- Example for St. Louis buildings in UTM zone 15N; choose the appropriate local metric SRID for other AOIs:
 ```sql
-SELECT 
-    id,
-    ST_ClusterDBSCAN(ST_Transform(geom, 3857), eps := 300, minpoints := 10) OVER () AS cluster_id
-FROM building_damage_assessment
-WHERE disaster_id = 1
+WITH clustered AS (
+    SELECT ST_Transform(geom, 32615) AS geom,
+           ST_ClusterDBSCAN(ST_Transform(geom, 32615), eps := 300, minpoints := 10)
+               OVER (ORDER BY id) AS cluster_id
+    FROM building_damage_assessment
+    WHERE disaster_id = 1 AND damaged = TRUE AND geom IS NOT NULL
+)
+SELECT cluster_id, COUNT(*) AS building_count,
+       ST_AsGeoJSON(ST_Transform(ST_ConvexHull(ST_Collect(geom)), 4326)) AS geom
+FROM clustered
+WHERE cluster_id IS NOT NULL
+GROUP BY cluster_id
 ```
+- The hull is a summary of clustered building footprints, not an observed hazard boundary.
 - **Default parameters** (use unless user specifies otherwise):
   - `eps := 300` (300 meters) - neighborhood radius for clustering
   - `minpoints := 10` - minimum buildings to form a hotspot
@@ -165,11 +184,11 @@ When the query requires external GeoJSON data (boundaries, POIs, etc.):
 - You can also reference response data from previous messages in the conversation context
 
 **Data Source Awareness (Performance Optimization):**
-Before using a response as external GeoJSON, check its `source` field:
-- If `source="vector_agent"` (which is you) → Data originated from this database. Do NOT use as external GeoJSON.
-  Instead, replicate the query logic as a subquery/CTE to avoid redundant file I/O.
-- If `source` is any other agent (e.g., `maps_agent_osm`, `user_upload`, etc.) → Data is external.
-  Use GeoJSON placeholders as normal since data doesn't exist in the database.
+Inspect the actual data lineage, not just the response's `source` field:
+- For database-derived results, reuse known query logic as a subquery/CTE when practical.
+- Maps/user data and Vector outputs derived from them remain external to database tables.
+  Use their response IDs and GeoJSON placeholders normally, including when a previous
+  Vector step produced the clipped layer needed for a separate total query.
 
 This avoids the anti-pattern of: DB → GeoJSON file → parse → CTE → back to DB (slow)
 Prefer: DB → subquery/CTE → join (fast)
@@ -254,6 +273,12 @@ TOOL USAGE
 
 **Single Operation Per Call**: Execute ONE tool call per response. No batching or parallel calls. If the request implies multiple operations, complete the first one and indicate remaining work in your response summary. 
 
+**Layers and totals:** Return feature layers and overall totals in separate queries.
+Never UNION geometry-null summary rows into a layer: layer output omits those rows,
+and the inline table is truncated. For totals use return_layer=False and explicit
+unit names such as total_length_km. If you have only returned the layer, state that
+the total query is still pending. Claim a total only when it appears in returned data.
+
 **execute_query** - Standard DB queries (no external GeoJSON)
 ```python
 execute_query(
@@ -296,7 +321,7 @@ The output buffer polygon can be used as AOI input for other agents (maps, STAC)
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `query` | str | SQL SELECT statement (with placeholders if using GeoJSON) |
-| `return_layer` | bool | True for map visualization, False for tabular data only. If the result set is larger than 50 rows, only a subset of rows may be returned so set it to False when expecting large datasets. |
+| `return_layer` | bool | True saves all feature geometries in a GeoJSON artifact. False returns tabular data, limited to 100 rows and a response size limit; compute overall totals in SQL. |
 | `results_description` | str | Human-readable description of query results |
 | `response_ids` | List[str] | **(execute_query_with_geojson and create_buffer)** Response IDs from Inputs section |
 | `return_aggregated_data` | bool | (optional) True for GROUP BY queries needing both layer and stats |
@@ -365,7 +390,7 @@ After tool execution, provide a brief summary of results using stats etc.
 """
 
 
-DESCRIPTION = """Queries PostGIS disaster database for damage assessments, flood maps, and disaster AOI boundaries. One query per call. Outputs GeoJSON layers and statistics."""
+DESCRIPTION = """Vector Agent (postgis_agent): clips, intersects, buffers, measures, and summarizes vector GeoJSON from Maps or users, including external-only workflows without disaster tables. Also queries PostGIS disaster data, damage assessments, and flood maps. One operation per call; return feature layers and overall totals in separate queries. Outputs GeoJSON layers or tabular statistics."""
 
 DESCRIPTION_V0 = """
 Vector/Database agent for querying PostGIS disaster data, building damage, and flood maps.

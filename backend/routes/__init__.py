@@ -4,7 +4,7 @@
 """
 Routes module - FastAPI route handlers organized by domain.
 """
-from backend.routes.benchmark import router as benchmark_router
+from backend.routes.reset import router as reset_router
 from backend.routes.frontend_config import router as frontend_config_router
 from backend.routes.geojson import router as geojson_router
 from backend.routes.history import router as history_router
@@ -18,7 +18,7 @@ __all__ = [
     "history_router",
     "geojson_router",
     "raster_router",
-    "benchmark_router",
+    "reset_router",
     "websocket_router",
     "polling_router",
     "frontend_config_router",

@@ -26,6 +26,7 @@ from agents.maps_agent.utils import (
     get_polygon_from_geometry,
     osm_gdf_to_geojson_features,
     run_osmnx_async,
+    features_from_bbox,
     validate_geometry_input,
     estimate_feature_count,
     reverse_geocode_nominatim,
@@ -236,6 +237,7 @@ async def get_admin_boundary(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -293,8 +295,7 @@ async def get_neighborhoods(
             elif input_type == "place":
                 gdf_admin = await run_osmnx_async(ox.features_from_place, input_value, tags=boundary_admin_tags)
             else:
-                north, south, east, west = input_value
-                gdf_admin = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=boundary_admin_tags)
+                gdf_admin = await features_from_bbox(input_value, boundary_admin_tags)
         except Exception as e:
             admin_query_failed = True
             logger.warning(f"Admin-boundary neighborhood query failed ({e})")
@@ -314,8 +315,7 @@ async def get_neighborhoods(
                 elif input_type == "place":
                     gdf_place = await run_osmnx_async(ox.features_from_place, input_value, tags=place_neighborhood_tags)
                 else:
-                    north, south, east, west = input_value
-                    gdf_place = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=place_neighborhood_tags)
+                    gdf_place = await features_from_bbox(input_value, place_neighborhood_tags)
             except Exception as e:
                 logger.warning(f"Place-based neighborhood fallback query failed: {e}")
                 gdf_place = gpd.GeoDataFrame()
@@ -345,6 +345,7 @@ async def get_neighborhoods(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
 
     except Exception as e:
@@ -420,6 +421,7 @@ async def get_address_coordinates(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -499,6 +501,7 @@ async def get_place_bounding_box(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -558,8 +561,7 @@ async def search_feature_by_name(
         if place_name:
             gdf = await run_osmnx_async(ox.features_from_place, place_name, tags=tags)
         else:
-            north, south, east, west = bbox
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(bbox, tags)
         
         if gdf.empty:
             return build_error_response(
@@ -596,6 +598,7 @@ async def search_feature_by_name(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -856,6 +859,7 @@ async def reverse_geocode(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:

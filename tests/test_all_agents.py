@@ -7,8 +7,6 @@ Test All Agents
 Run: python -m tests.test_all_agents
 """
 
-import asyncio
-from agents.core.config import get_config
 from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 from agents.vector_agent import create_vector_agent
@@ -23,8 +21,6 @@ def test_all_agents_creation():
     print("Testing All Agent Creation")
     print("=" * 60)
     
-    config = get_config()
-    
     agents_to_test = [
         ("VECTOR_AGENT", create_vector_agent, AGENT_NAMES["VECTOR_AGENT"]),
         ("MAPS_AGENT", create_map_search_agent, None),
@@ -33,8 +29,7 @@ def test_all_agents_creation():
     ]
     
     for agent_key, factory, name_arg in agents_to_test:
-        model = config.get_agent_model(agent_key)
-        client = init_model_client(model=model)
+        client = init_model_client(client_key=agent_key)
         
         try:
             if name_arg:
@@ -43,7 +38,7 @@ def test_all_agents_creation():
                 agent = factory(client)
             
             print(f"✓ {agent_key}: {agent.name}")
-            print(f"  Model: {model}")
+            print(f"  Model client: {agent_key}")
             print(f"  Tools: {len(agent._tools)}")
         except Exception as e:
             print(f"✗ {agent_key}: {e}")
@@ -55,15 +50,10 @@ def test_config():
     print("Testing Configuration")
     print("=" * 60)
     
-    config = get_config()
-    
-    print(f"Default model: {config.default_model}")
-    print(f"Reasoning model: {config.reasoning_model}")
-    print()
-    print("Agent models:")
+    print("Agent model clients:")
     for key in ["VECTOR_AGENT", "MAPS_AGENT", "STAC_AGENT", "RASTER_AGENT", 
                 "ORCHESTRATOR_PLANNER", "ORCHESTRATOR_PROGRESS"]:
-        print(f"  {key}: {config.get_agent_model(key)}")
+        print(f"  {key}: configured")
 
 
 def test_imports():

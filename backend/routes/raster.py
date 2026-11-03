@@ -16,6 +16,9 @@ from fastapi.responses import JSONResponse
 
 from backend.routes.config import USER_ARTIFACTS_JSON, USER_DATA_PATH
 from backend.services.raster_service import raster_service
+from agents.core.types import GeoFahamToolResponse
+from agents.core.response_store import get_response_store
+from agents.raster_ops_agent.io_utils import read_raster_metadata
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,7 +62,7 @@ async def upload_raster(
 
         # Generate unique filename
         file_id = uuid.uuid4().hex
-        filename = f"{file_id}_{file.filename}"
+        filename = f"{file_id}_{os.path.basename(file.filename)}"
         file_path = os.path.join(USER_DATA_PATH, filename)
 
         # Save file
@@ -108,11 +111,22 @@ async def upload_raster(
         async with aiofiles.open(USER_ARTIFACTS_JSON, "w") as f:
             await f.write(json.dumps(artifacts, indent=2))
 
+        response = GeoFahamToolResponse(
+            response_id=f"user_{file_id}", source="user", data_type="raster",
+            artifact={"path": file_path, "format": "geotiff", "content_type": "image/tiff",
+                      "bytes": os.path.getsize(file_path),
+                      "metadata": read_raster_metadata(file_path)},
+            summary=f"Uploaded raster: {title}. {description or ''}",
+            metadata={"uploaded_file": True, "title": title, "filename": file.filename},
+        )
+        get_response_store().store(response)
+
         logger.info(f"Uploaded raster: {filename}")
 
         return JSONResponse(
             content={
                 "success": True,
+                "response_id": response.response_id,
                 "artifact": artifact,
                 "message": f"Raster '{title}' uploaded successfully",
             }

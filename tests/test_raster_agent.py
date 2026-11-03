@@ -7,9 +7,6 @@ Test Raster Ops Agent
 Run: python -m tests.test_raster_agent
 """
 
-import json
-from agents.core.config import get_config
-from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 from agents.raster_ops_agent import create_raster_ops_agent
 
@@ -20,11 +17,9 @@ def test_create_agent():
     print("Testing create_raster_ops_agent()")
     print("=" * 60)
     
-    config = get_config()
-    model = config.get_agent_model("RASTER_AGENT")
-    print(f"Using model: {model}")
+    print("Using model client: RASTER_AGENT")
     
-    client = init_model_client(model=model)
+    client = init_model_client(client_key="RASTER_AGENT")
     agent = create_raster_ops_agent(client)
     
     print(f"✓ Agent created: {agent.name}")

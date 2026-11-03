@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 from pydantic import BaseModel
+from typing import Literal
 
 class LedgerEntryBooleanAnswer(BaseModel):
     reason: str
@@ -51,6 +52,8 @@ class InstructionOrQuestion(BaseModel):
 
 
 class LedgerEntry(BaseModel):
+    stop_reason: str = ""
+    temporal_mode: Literal["unspecified", "single_scene", "composite", "change_detection"]
     validation_checks: ValidationChecks
     is_request_satisfied: LedgerEntryBooleanAnswer
     is_in_loop: LedgerEntryBooleanAnswer
@@ -106,9 +109,9 @@ Before claiming any step is complete, you MUST verify:
 - Only after postgis_agent/map_search_agent actually runs and returns a response with a `response_id` does that output exist
 
 **If this is the first turn after planning:**
-- `all_previous_steps_completed` should be `false` (no agents have run yet)
+    - `all_previous_steps_completed` should be `true` for Step 1 (there are no earlier plan steps)
 - `current_step` should be Step 1
-- `inputs` should be empty (no prior outputs exist)
+- `inputs` must include any registered user uploads, drawn AOIs or existing responses needed by Step 1. Use [] only when the step needs no registered inputs.
 
 ---
 
@@ -116,18 +119,41 @@ Before claiming any step is complete, you MUST verify:
 
 1. **Follow the plan**: Stick to the original plan steps unless there's a solid reason to deviate
 2. **Sequential steps**: Complete one task before moving to next
-3. **Reference by ID**: Use response_ids for previous outputs - ONLY if they actually exist in conversation
+3. **Reference by ID**: Use response_ids only from actual registered responses, including user uploads and drawn AOIs
 4. **Natural language**: Write instructions as you would to a teammate
 5. **Track context**: Always include user intent, plan + what's been done
 6. **Minimal details**: No file paths, coordinates, or technical specs - agents know their job
-7. **Input Validation**: Verify required inputs for the next step are available IN ACTUAL AGENT RESPONSES
+7. **Input Validation**: Verify required inputs are available in actual registered user or agent responses
 8. **Output Validation**: Check that the last response matches expected type/content
 9. **Action Decision**: If anything is missing or incorrect, fetch, clarify, or correct before proceeding
 
 ---
 
-# Instruction Notes:
-- Raster Ops Agent: Do not spcify the type of indicies or 
+# VALIDATION AND TEMPORAL REQUIREMENTS
+- Set stop_reason to an empty string to continue or finish successfully. If an actual
+  tool error prevents the requested work and there is no useful recovery within the
+  user's constraints, set stop_reason to a concise explanation, keep
+  is_request_satisfied.answer=false, and reference the failed response ID(s) in inputs.
+  This ends with an incomplete-work answer, without dispatching another agent or
+  requiring failed dependencies to pass validation. Error responses may support
+  stopping, never a successful computation or completion claim. Do not retry an
+  unavailable service merely to make an unsuccessful workflow appear complete.
+- Set temporal_mode to single_scene for a single-date imagery analysis, composite only
+  when temporal aggregation is requested, change_detection for pre/post comparisons,
+  otherwise unspecified. Keep it unchanged throughout this request.
+- Include "Temporal mode: <temporal_mode>" in raster instructions and require that
+  execute_custom_raster_code receives that exact temporal_mode argument.
+- For single_scene, select one acquisition date before loading imagery. Several candidate
+  scenes do not authorize a composite. Require scene IDs and acquisition dates in outputs.
+- Set can_proceed only when required inputs are available; an empty missing_inputs list
+  describes prerequisites, not the computation the next agent is about to perform.
+- When a step has no artifact prerequisites, required_artifacts_present is true.
+- Use [] for missing_inputs when none are missing, never ["None"].
+- If no prior output is expected, output_matches_expectation/output_is_usable_for_next_step
+  may be false. When declaring completion, they and the plan/input checks must be true.
+- A completed task must reference its final evidence in instruction_or_question.inputs.
+- Failed code checks are execution evidence: correct the failed step or report incomplete
+  work. Do not claim a layer exists based on a summary when its artifact path is invalid.
 
 
 ---
@@ -135,6 +161,8 @@ Before claiming any step is complete, you MUST verify:
 Please output an answer in pure JSON format according to the following schema. The JSON object must be parsable as-is. DO NOT OUTPUT ANYTHING OTHER THAN JSON, AND DO NOT DEVIATE FROM THIS SCHEMA:
 
 {{
+    "stop_reason": string (empty to continue/succeed; otherwise explain why actual tool failure prevents completion),
+    "temporal_mode": string (unspecified, single_scene, composite, or change_detection; preserve the user request),
     "validation_checks": {{
         "plan_adherence": {{
             "current_step": string (e.g., "Step 2: Fetch hospital POIs"),
@@ -145,8 +173,9 @@ Please output an answer in pure JSON format according to the following schema. T
         }},
         "input_validation": {{
             "next_agent_needs": array of strings (list what the next agent needs),
-            "available": array of strings (list what data we currently have FROM ACTUAL AGENT RESPONSES),
-            "missing_inputs_for_next_agent": array of strings (list what's missing, empty if none),
+            "available_in_ledger": array of strings (list actual registered user or agent responses),
+            "missing_inputs": array of strings (list what's missing, empty if none),
+            "data_type_matches": boolean,
             "can_proceed": boolean
         }},
         "output_validation": {{
@@ -174,22 +203,20 @@ Please output an answer in pure JSON format according to the following schema. T
     }},
     "instruction_or_question": {{
         "reason": "string",
-        "answer": {{
         "instruction": "string",
         "context": "string (2-4 lines: disaster type/dates/location, temporal windows with 
                    specific date ranges from plan, analysis type, required datasets, 
                    user intent and spatial scope)",
-        "inputs": array of strings (list of response_ids ONLY from actual agent responses - empty list if first step or no prior outputs),
+        "inputs": array of strings (response_ids from actual registered user or agent responses needed by this step; empty only when none are needed),
         "output_requirements": "string"
-        }}
     }}
 
 }}
 
 
 # CRITICAL REMINDERS
-- ✅ Use response_ids ONLY from actual agent responses in conversation history
-- ✅ If no agents have responded yet, inputs MUST be an empty list []
+- ✅ Use response_ids only from actual registered user or agent responses in context
+- ✅ User uploads and drawn AOIs can be valid inputs before any agent has responded
 - ✅ Keep instructions minimal and natural language
 - ✅ Include user context in every instruction
 - ✅ Follow the plan sequentially
@@ -202,5 +229,5 @@ Please output an answer in pure JSON format according to the following schema. T
 - ❌ Don't skip steps or combine multiple tasks
 - ❌ Don't do parallel call
 - ❌ Don't write anything else in "inputs" other than response_ids values references if you need to write any (wrong: ["response_id:response_8a2b3373-92a"] correct: ["response_8a2b3373-92a"]). If some extra information is to be sent to the next agent, use instruction or context.
-- ❌ Don't hallucinate response_ids - if no agent has responded, inputs = []
+- ❌ Don't hallucinate response_ids; a planned output is never a registered input
 """

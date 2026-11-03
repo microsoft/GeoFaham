@@ -34,6 +34,7 @@ from agents.maps_agent.utils import (
     get_polygon_from_geometry,
     osm_gdf_to_geojson_features,
     run_osmnx_async,
+    features_from_bbox,
     validate_geometry_input,
     estimate_feature_count,
     OSM_ROAD_TYPES,
@@ -101,10 +102,8 @@ async def get_roads(
                 tags={"highway": highway_filter if highway_filter else True}
             )
         else:  # bbox
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(
-                ox.features_from_bbox, north, south, east, west,
-                tags={"highway": highway_filter if highway_filter else True}
+            gdf = await features_from_bbox(
+                input_value, {"highway": highway_filter if highway_filter else True}
             )
         
         if include_bridges and not gdf.empty:
@@ -135,6 +134,7 @@ async def get_roads(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -189,8 +189,7 @@ async def get_buildings(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
 
         if not gdf.empty:
             gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
@@ -213,6 +212,7 @@ async def get_buildings(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -264,8 +264,7 @@ async def get_waterways(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if not gdf.empty:
             gdf = gdf[gdf.geometry.geom_type.isin(["LineString", "MultiLineString", "Polygon", "MultiPolygon"])]
@@ -288,6 +287,7 @@ async def get_waterways(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -330,8 +330,7 @@ async def get_bridges(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if not gdf.empty:
             if "bridge" in gdf.columns:
@@ -356,6 +355,7 @@ async def get_bridges(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -402,8 +402,7 @@ async def get_pois(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if gdf.empty:
             return build_empty_response(
@@ -423,6 +422,7 @@ async def get_pois(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -474,8 +474,7 @@ async def get_landuse(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if not gdf.empty:
             gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])]
@@ -498,6 +497,7 @@ async def get_landuse(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -539,8 +539,7 @@ async def get_natural_features(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if gdf.empty:
             return build_empty_response(
@@ -560,6 +559,7 @@ async def get_natural_features(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -606,8 +606,7 @@ async def get_infrastructure(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if gdf.empty:
             return build_empty_response(
@@ -627,6 +626,7 @@ async def get_infrastructure(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:
@@ -680,8 +680,7 @@ async def get_features_by_tags(
         elif input_type == "place":
             gdf = await run_osmnx_async(ox.features_from_place, input_value, tags=tags)
         else:
-            north, south, east, west = input_value
-            gdf = await run_osmnx_async(ox.features_from_bbox, north, south, east, west, tags=tags)
+            gdf = await features_from_bbox(input_value, tags)
         
         if gdf.empty:
             return build_empty_response(
@@ -701,6 +700,7 @@ async def get_features_by_tags(
             stats=artifact.stats,
             property_keys=artifact.property_keys,
             geom_types=artifact.geom_types,
+            artifact_metadata=artifact.metadata,
         )
         
     except Exception as e:

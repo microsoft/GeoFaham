@@ -63,7 +63,6 @@ const GeoFahamApp = {
         // Initialize modals
         UploadModal.init();
         VisualizeModal.init();
-        BenchmarkModal.init();
         
         // Setup debug mode
         this.setupDebugMode();
@@ -144,6 +143,7 @@ const GeoFahamApp = {
      */
     resetApplication: function() {
         console.log('Resetting application...');
+        WebSocketManager.disconnect();
         
         const resetButton = document.getElementById('reset-button');
         const originalContent = resetButton ? resetButton.innerHTML : '';
@@ -176,11 +176,16 @@ const GeoFahamApp = {
                     'Content-Type': 'application/json'
                 }
             })
-            .then(response => response.json())
+            .then(async response => {
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Reset failed');
+                return data;
+            })
             .then(data => {
                 if (data.success) {
                     console.log('Backend state cleared successfully');
                     ChatUI.displayMessage('Application reset successfully. All history and state cleared.', 'system');
+                    WebSocketManager.init(GeoFahamState.currentMode);
                 } else {
                     console.error('Backend reset failed:', data);
                     ChatUI.displayMessage('Application reset completed, but there was an issue clearing backend state.', 'system');
@@ -210,7 +215,6 @@ const GeoFahamApp = {
             }, 1000);
         }
         
-        ChatUI.enableInput();
     },
 
     /**

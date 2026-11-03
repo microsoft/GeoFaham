@@ -9,7 +9,7 @@ import uuid
 import time
 import logging
 import traceback
-from typing import Annotated
+from typing import Annotated, Literal
 
 import xarray as xr
 import geopandas as gpd
@@ -43,8 +43,31 @@ AGENT_NAME = AGENT_NAMES["RASTER_AGENT"]
 async def execute_custom_raster_code(
     code: Annotated[str, "Python code using allowed libraries. Must assign final result to 'result' variable."],
     result_explanation: Annotated[str, "Clear explanation of what the result represents"],
+    return_layer: Annotated[bool, "True for map layers; False for statistics-only dictionary results"],
+    expected_result_type: Annotated[str, "Expected result: 'raster' (DataArray), 'vector' (GeoDataFrame), 'statistics' (non-empty named dictionary), or 'mix'"],
+    temporal_mode: Literal["unspecified", "single_scene", "composite", "change_detection"] = "unspecified",
+) -> str:
+    """Execute generated raster Python in a cancellable process with a time limit.
+
+    Assign the output to result. Use registered input paths and the requested
+    temporal_mode. Final GeoDataFrames require return_layer=True; statistics only
+    require a non-empty JSON-compatible named dictionary and return_layer=False.
+    Returns the actual artifacts/statistics or a structured execution error.
+    """
+    from agents.raster_ops_agent.worker import execute_raster_in_process
+    return await execute_raster_in_process({
+        "code": code, "result_explanation": result_explanation,
+        "return_layer": return_layer, "expected_result_type": expected_result_type,
+        "temporal_mode": temporal_mode,
+    })
+
+
+async def _execute_custom_raster_code(
+    code: Annotated[str, "Python code using allowed libraries. Must assign final result to 'result' variable."],
+    result_explanation: Annotated[str, "Clear explanation of what the result represents"],
     return_layer: Annotated[bool, "Whether to return a map layer (True) or just data/statistics (False)"],
-    expected_result_type: Annotated[str, "Expected type of result: 'raster' (xarray.DataArray), 'vector' (GeoDataFrame), 'statistics' (dict/number), 'mix' (combination of raster and vector)"]
+    expected_result_type: Annotated[str, "Expected type of result: 'raster' (xarray.DataArray), 'vector' (GeoDataFrame), 'statistics' (non-empty dict of named JSON-compatible statistics), 'mix' (combination of raster and vector)"],
+    temporal_mode: Literal["unspecified", "single_scene", "composite", "change_detection"] = "unspecified",
 ) -> str:
     """
     Execute custom Python code for raster operations with full flexibility.
@@ -61,8 +84,12 @@ async def execute_custom_raster_code(
     Args:
         code: Python code to execute. Must assign result to 'result' variable.
         result_explanation: Human-readable description of what the results represent.
-        return_layer: If True, writes raster result as COG or vector as GeoJSON for map display
+        return_layer: If True, writes raster result as COG or vector as GeoJSON for map display.
+            Final GeoDataFrame outputs require True; for statistics only return a dictionary.
         expected_result_type: 'raster', 'vector', 'statistics', or 'mix'
+            For 'statistics', result must be a non-empty dictionary of named
+            JSON-compatible statistics (not a bare number or metadata-only answer).
+        temporal_mode: Match the requested temporal mode; single_scene requires one acquisition date.
         
     Returns:
         JSON string with execution results and output file paths if applicable
@@ -73,16 +100,7 @@ async def execute_custom_raster_code(
         print(f"Executing custom raster code: {result_explanation}")
         
         # Initialize executor
-        executor = RasterCodeExecutor()
-        
-        # Validate code
-        is_valid, validation_msg = executor.validate_code(code)
-        if not is_valid:
-            return build_error_response(
-                source=AGENT_NAME,
-                error_message=validation_msg,
-                metadata={"validation_error": True}
-            )
+        executor = RasterCodeExecutor(temporal_mode=temporal_mode)
         
         start_time = time.time()
         
@@ -98,6 +116,21 @@ async def execute_custom_raster_code(
         
         result = result_meta.get("result", None)
         metadata = result_meta.get("metadata", {})
+
+        if expected_result_type == "statistics":
+            if not isinstance(result, dict) or not result:
+                return build_error_response(
+                    source=AGENT_NAME,
+                    error_message="Statistics output must assign a non-empty dictionary to result, e.g. result = {'mean': 0.5}",
+                    metadata=metadata,
+                )
+            return build_data_response(
+                source=AGENT_NAME,
+                data=[result],
+                summary=result_explanation,
+                data_type=DataType.STATS,
+                metadata=metadata,
+            )
         
         # Handle intermediate saving if requested
         if metadata.get("save_as_intermediate", False):
@@ -166,7 +199,7 @@ async def execute_custom_raster_code(
         # Handle single DataArray
         if isinstance(result, xr.DataArray):
             single_layer = await handle_single_raster(result)
-            artifact_path = single_layer.get("path", "")
+            artifact_path = single_layer["url"]
             crs = str(result.rio.crs) if hasattr(result, 'rio') and result.rio.crs else "EPSG:4326"
             bounds = list(result.rio.bounds()) if hasattr(result, 'rio') else []
             return build_raster_layer_response(
@@ -175,30 +208,36 @@ async def execute_custom_raster_code(
                 summary=result_explanation,
                 crs=crs,
                 bounds=bounds,
-                stats=single_layer.get("stats"),
+                stats=single_layer["statistics"],
+                artifact_metadata=single_layer["metadata"],
                 metadata=response
             )
         
         # Handle GeoDataFrame
         if isinstance(result, gpd.GeoDataFrame):
-            if return_layer:
-                # project to 4326 if not
-                if result.crs != "EPSG:4326":
-                    result = result.to_crs("EPSG:4326")
-                geojson_data = result.to_geo_dict()
-                artifact = await results_to_geojson(geojson_data, compute_stats=True)
-                response['output_type'] = 'geojson'
+            if not return_layer:
+                return build_error_response(
+                    source=AGENT_NAME,
+                    error_message="GeoDataFrame results require return_layer=True. For statistics only, assign a named dictionary to result and use expected_result_type='statistics'.",
+                    metadata=response,
+                )
+            # project to 4326 if not
+            if result.crs != "EPSG:4326":
+                result = result.to_crs("EPSG:4326")
+            geojson_data = result.to_geo_dict()
+            artifact = await results_to_geojson(geojson_data, compute_stats=True)
+            response['output_type'] = 'geojson'
             
             # artifact is SavedArtifact object, not dict
-            artifact_path = artifact.path if return_layer else ""
             return build_layer_response(
                 source=AGENT_NAME,
-                artifact_path=artifact_path,
+                artifact_path=artifact.path,
                 summary=result_explanation,
                 features_count=len(result),
-                stats=artifact.stats if return_layer else None,
-                property_keys=artifact.property_keys if return_layer else None,
+                stats=artifact.stats,
+                property_keys=artifact.property_keys,
                 geom_types=list(result.geom_type.unique()) if len(result) > 0 else None,
+                artifact_metadata=artifact.metadata,
                 metadata=response,
                 data_type=DataType.VECTOR,
                 artifact_format=ArtifactFormat.GEOJSON

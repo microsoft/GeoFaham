@@ -29,7 +29,7 @@ AGENT_CAPABILITIES_DOC = """
 
 ### postgis_agent
 
-**Role:** Query the PostGIS disaster database containing historical disaster records, building damage assessments, and flood maps.
+**Role:** Vector Agent for spatial analysis of Maps/user GeoJSON and queries of the PostGIS disaster database. External-only analysis does not require disaster data or database table joins.
 
 **Data Sources:**
 - Disaster metadata (type, date, location, AOI/extent geometry)
@@ -47,7 +47,7 @@ AGENT_CAPABILITIES_DOC = """
 
 **Constraints:**
 - **Single-purpose per call:** Each step should accomplish ONE focused objective (e.g., retrieve AOI OR query damage Or Flood Map, not all or two)
-- **Database-only:** Cannot access external data sources; use map_search_agent for OSM features
+- **Retrieval:** Use Maps to fetch OSM features; pass its response IDs to postgis_agent for vector processing. postgis_agent can process supplied external GeoJSON without querying disaster tables.
 - **Read-only:** Can only query, not modify data
 - **Flood extent vs. Flood Extent AOI:** Flood extent refers to the actual flood polygons, while Flood Extent AOI is a single GeoJSON defining the area of interest.
 - **Building damage labeling:** Buildings are not labeled by name or categories or other identifiers like neighborhood; each building has a damage assessment.
@@ -60,6 +60,7 @@ AGENT_CAPABILITIES_DOC = """
 - Spatial operations: intersection, containment, proximity, clustering
 - Aggregate statistics: counts, percentages, groupings
 - Spatial joins with external GeoJSON (POIs, boundaries from other agents)
+- Clip and measure Maps/user GeoJSON, including per-feature WGS84 lengths and separate aggregate totals
 - **Create buffer geometries** from points, lines, or polygons (use `create_buffer` tool)
 
 **Tools:**
@@ -140,7 +141,7 @@ AGENT_CAPABILITIES_DOC = """
 |------------|-------------|
 | Multi-collection queries | Fetch multiple data types in one call (imagery + LULC + population) |
 | Dual-date support | Pre/post disaster imagery in single fetch |
-| Coverage validation | Automatic fallback to alternative collections if coverage insufficient |
+| Coverage validation | Tries supplied compatible collections if coverage is insufficient; preserve user sensor/date/method constraints |
 | Population statistics | Per-feature stats for multi-polygon AOIs (neighborhoods, districts, etc.) |
 | Cloud filtering | Automatic for optical imagery |
 
@@ -166,7 +167,7 @@ This enables queries like "population of each neighborhood" or "which district h
 - Vector files for masking/zoning (GeoJSON)
 
 **Inputs:**
-- STAC items JSON file path(s) from stac_agent
+- STAC items JSON file path(s) from stac_agent OR an existing raster file from a user/previous step
 - Analysis objective in natural language
 - Optional: Vector boundaries for clipping or zonal analysis
 
@@ -176,7 +177,7 @@ This enables queries like "population of each neighborhood" or "which district h
 - Computed statistics
 
 **Constraints:**
-- **Requires imagery input:** Cannot fetch satellite data directly; depends on stac_agent output
+- **Requires raster input:** Use STAC items for new imagery, or an existing saved raster directly. Do not fetch new imagery when the supplied raster already answers the request.
 - **Single analysis focus:** Each step should target one analytical objective
 - **Computational:** For derived products, not raw data retrieval
 
@@ -198,12 +199,17 @@ This enables queries like "population of each neighborhood" or "which district h
 Each step should have ONE clear objective. If a task requires multiple data retrievals or analyses, split into separate steps.
 
 ### 2. Data Flow Dependencies
-- stac_agent and raster_ops_agent require AOI geometry → ensure prior step provides it
-- raster_ops_agent requires STAC items → ensure stac_agent runs first
-- postgis_agent spatial joins require external GeoJSON → ensure map_search_agent provides it
+- stac_agent requires AOI geometry from a prior response or user input
+- raster_ops_agent requires STAC items for new imagery, or a saved raster; a separate AOI is needed only when clipping/zoning is requested
+- postgis_agent external spatial operations require GeoJSON from Maps, a user upload or an existing response
 - **Spatial geometry creation** (buffers, distance-based AOIs) → postgis_agent must create geometry BEFORE other agents can use it
 
 ### 2a. Spatial Geometry Operations
+The Vector Agent is `postgis_agent`; `raster_ops_agent` is the Raster Agent, not a substitute for Vector.
+Route clipping, intersections, distances, lengths, areas, and statistics on Maps/user vector layers to postgis_agent.
+For a layer plus an overall total, plan separate Vector calls: first the feature layer,
+then a non-layer aggregate query with explicit units (e.g., total_length_km).
+Do not mark the total complete until that aggregate response contains the value.
 When queries involve spatial constraints like radius, distance, or buffers:
 - **postgis_agent** is the ONLY agent that can create derived geometries (ST_Buffer, ST_ConvexHull, etc.)
 - map_search_agent can only EXTRACT existing features within a provided AOI—it cannot create buffers or distance-based geometries
@@ -214,6 +220,7 @@ When queries involve spatial constraints like radius, distance, or buffers:
 |-----------|-------|
 | Disaster records, damage, floods | postgis_agent |
 | Derived spatial geometries (buffers, distance-based AOIs) | postgis_agent |
+| Spatial analysis and measurements on Maps/user GeoJSON | postgis_agent |
 | OSM features (POIs, roads, boundaries, infrastructure) | map_search_agent |
 | Satellite imagery, population, elevation, land cover | stac_agent |
 | Derived raster products (indices, classifications) | raster_ops_agent |

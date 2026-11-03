@@ -68,7 +68,8 @@ def create_vector_agent(
                     "Parameters: query (str), return_layer (bool), results_description (str), "
                     "geojson_paths (list, default []), property_keys (dict, default {}), "
                     "return_aggregated_data (bool, default False - set True for GROUP BY queries to get both layer and data table). "
-                    "NOTE: When return_aggregated_data=True, only first 50 rows are returned in response (full data saved to artifact file). "
+                    "NOTE: Inline data is limited to 100 rows and a response size limit. The artifact contains geometry-bearing features. "
+                    "Return overall totals in a separate query with return_layer=False, never as geometry-null layer rows. "
                     "Use ORDER BY to ensure most relevant rows appear first (e.g., ORDER BY damage_count DESC)."
                 ),
             ),
@@ -81,7 +82,8 @@ def create_vector_agent(
                     "Parameters: query (str), return_layer (bool), results_description (str), "
                     "response_ids (List[str], required - IDs from Inputs section; backend resolves paths/properties), "
                     "return_aggregated_data (bool, default False - set True for GROUP BY queries). "
-                    "NOTE: When return_aggregated_data=True, only first 50 rows are returned in response (full data saved to artifact file). "
+                    "NOTE: Inline data is limited to 100 rows and a response size limit. The artifact contains geometry-bearing features. "
+                    "Return overall totals in a separate query with return_layer=False, never as geometry-null layer rows. "
                     "Use ORDER BY to ensure most relevant rows appear first (e.g., ORDER BY damage_count DESC)."
                 ),
             ),

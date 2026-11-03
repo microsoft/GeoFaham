@@ -2,9 +2,9 @@
 # Licensed under the MIT License.
 
 """
-Raster Code Executor - Sandboxed Python execution for raster operations.
+Raster Code Executor - Python execution for raster operations.
 
-This class provides a safe execution environment using asteval for
+This class provides an asteval execution environment for
 arbitrary Python code that manipulates raster and vector data.
 """
 
@@ -31,6 +31,8 @@ from pystac import ItemCollection
 import planetary_computer
 from dask.distributed import Client, LocalCluster
 
+from agents.raster_ops_agent.sandbox import guarded
+
 
 class CodeExecutionError(Exception):
     """Raised when code execution fails."""
@@ -39,15 +41,20 @@ class CodeExecutionError(Exception):
 
 class RasterCodeExecutor:
     """
-    Executes arbitrary Python code for raster operations in a sandboxed environment.
+    Executes generated Python code for raster operations without OS isolation.
     
     The LLM can write full Python using xarray, numpy, and geopandas to perform
     any raster analysis without being constrained by pre-defined functions.
     """
     
-    def __init__(self):
-        """Initialize the code executor with a safe asteval interpreter."""
+    def __init__(self, temporal_mode: str = "unspecified"):
+        """Initialize the interpreter and track imagery provenance."""
         self.aeval = Interpreter()
+        # The worker process adds a Python-level I/O guard (see sandbox.py); native GDAL
+        # access is not covered, so isolate the worker before accepting untrusted prompts.
+        self.temporal_mode = temporal_mode
+        self.source_scene_ids = set()
+        self.acquisition_dates = set()
         self.loaded_rasters = {}
         self.loaded_vectors = {}
         
@@ -61,11 +68,9 @@ class RasterCodeExecutor:
         self.aeval.symtable['datetime'] = datetime
         self.aeval.symtable['rasterio'] = rasterio  # For rasterio.features.shapes() vectorization
         
-        # Add all safe Python builtins
-        import builtins
-        for name in dir(builtins):
-            if not name.startswith('_'):
-                self.aeval.symtable[name] = getattr(builtins, name)
+        # Keep asteval's builtins; do not add unrestricted Python execution functions.
+        for name in ("open", "eval", "exec", "compile", "input", "breakpoint"):
+            self.aeval.symtable.pop(name, None)
         
         # Expose helper functions for loading
         self.aeval.symtable['load_stac_items'] = self.load_stac_items
@@ -73,9 +78,16 @@ class RasterCodeExecutor:
         self.aeval.symtable['load_vector_file'] = self.load_vector_file
         self.aeval.symtable['clip_to_aoi'] = self.clip_to_aoi
 
-    def validate_code(self, code: str) -> tuple[bool, str]:
-        """Validate code for security concerns before execution."""
-        return True, "Code validation passed"
+    def _record_sources(self, scene_ids, dates) -> None:
+        dates = self.acquisition_dates | set(dates)
+        if self.temporal_mode == "single_scene" and len(dates) != 1:
+            raise CodeExecutionError(
+                "single_scene requires exactly one acquisition date. "
+                "Select one scene using load_stac_items(properties_filter={'datetime': ...}) "
+                "before loading; do not replace it with a temporal composite."
+            )
+        self.source_scene_ids.update(scene_ids)
+        self.acquisition_dates = dates
     
     def clip_to_aoi(self, da: xr.DataArray, aoi_gdf: gpd.GeoDataFrame) -> xr.DataArray:
         """Clip DataArray to AOI geometry."""
@@ -131,9 +143,12 @@ class RasterCodeExecutor:
             cache_dir = os.path.join(tempfile.gettempdir(), "dask_cache")
             os.makedirs(cache_dir, exist_ok=True)
             
-            with LocalCluster(local_directory=cache_dir, processes=False) as cluster, Client(cluster) as client:
+            # Keep dask's HTTP servers on loopback; the defaults listen on all interfaces.
+            with LocalCluster(local_directory=cache_dir, processes=False,
+                              dashboard_address="127.0.0.1:0",
+                              worker_dashboard_address="127.0.0.1:0") as cluster, Client(cluster) as client:
                 # Suppress common non-critical warnings during execution
-                with warnings.catch_warnings():
+                with guarded(), warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message="Sending large graph", category=UserWarning)
                     warnings.filterwarnings("ignore", message="All-NaN slice", category=RuntimeWarning)
                     warnings.filterwarnings("ignore", message="invalid value encountered", category=RuntimeWarning)
@@ -148,12 +163,20 @@ class RasterCodeExecutor:
                     if result is None or (not isinstance(result, (dict, xr.DataArray, gpd.GeoDataFrame))):
                         result = self.aeval.symtable.get('result')
                     
-                    metadata = self.aeval.symtable.get('metadata', {})
+                    metadata = dict(self.aeval.symtable.get('metadata', {}))
+                    provenance = {
+                        "temporal_mode": self.temporal_mode,
+                        "source_scene_ids": sorted(self.source_scene_ids),
+                        "acquisition_dates": sorted(self.acquisition_dates),
+                    }
+                    metadata.update(provenance)
                     
                     if result is None:
                         return {"error": "Code did not assign a value to 'result' variable"}
                     
                     result_meta = dask.compute({"result": result, "metadata": metadata})[0]
+                    if isinstance(result_meta["result"], xr.DataArray):
+                        result_meta["result"].attrs["geofaham_temporal_provenance"] = json.dumps(provenance)
                 
             end_time = time.time()
             print(f"Code execution took {end_time - start_time:.2f} seconds")
@@ -217,6 +240,8 @@ class RasterCodeExecutor:
                     ok = True
                     for key, expected in properties_filter.items():
                         actual = item.properties.get(key)
+                        if key == "datetime" and isinstance(expected, str) and len(expected) == 10 and isinstance(actual, str):
+                            actual = actual[:10]
                         if isinstance(expected, (list, tuple, set)):
                             if actual not in expected:
                                 ok = False
@@ -232,6 +257,10 @@ class RasterCodeExecutor:
 
             if len(items) == 0:
                 raise ValueError(f"No STAC items found in {items_json_path}")
+            self._record_sources(
+                [item.id for item in items],
+                [item.properties["datetime"][:10] for item in items if item.properties.get("datetime")],
+            )
             
             print(f"Loading {len(items)} STAC items with bands {bands} at {resolution}m resolution")
 
@@ -262,6 +291,7 @@ class RasterCodeExecutor:
                 resolution=resolution,
                 chunksize=2048,
                 epsg=epsg_code,
+                xy_coords="center",
                 resampling=rasterio.enums.Resampling.bilinear
             )
 
@@ -290,7 +320,11 @@ class RasterCodeExecutor:
                 raise FileNotFoundError(f"Raster file not found: {path}")
             
             raster = rioxarray.open_rasterio(path, masked=True)
-            raster = raster.squeeze('band', drop=True)
+            provenance = json.loads(raster.attrs.get("geofaham_temporal_provenance", "{}"))
+            if provenance or self.temporal_mode == "single_scene":
+                self._record_sources(provenance.get("source_scene_ids", []), provenance.get("acquisition_dates", []))
+            if raster.sizes['band'] == 1:
+                raster = raster.squeeze('band', drop=True)
             epsg_code = raster.rio.crs.to_epsg() if raster.rio.crs else None
             return raster, epsg_code
             

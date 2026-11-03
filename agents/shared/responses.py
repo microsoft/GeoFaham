@@ -8,7 +8,9 @@ Factory functions for creating consistent GeoFahamToolResponse objects.
 All agent tools should use these builders to ensure response uniformity.
 """
 
+import json
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agents.core.types import (
@@ -18,6 +20,92 @@ from agents.core.types import (
     ResponseType,
     SavedArtifact,
 )
+
+
+def validate_response_artifacts(response: GeoFahamToolResponse) -> None:
+    """Reject unusable local outputs before they become workflow dependencies."""
+    if response.type in (ResponseType.ERROR, ResponseType.EMPTY):
+        raise ValueError(f"{response.response_id}: {response.error_message or response.summary or response.type}")
+    if response.type == ResponseType.LAYER and response.artifact is None:
+        raise ValueError(f"{response.response_id}: layer has no artifact")
+    if response.artifact is not None:
+        artifact = response.artifact
+        formats = {
+            DataType.VECTOR: (ArtifactFormat.GEOJSON,),
+            DataType.RASTER: (ArtifactFormat.GEOTIFF, ArtifactFormat.COG),
+            DataType.STAC_ITEMS: (ArtifactFormat.JSON, ArtifactFormat.GEOJSON),
+        }
+        if response.data_type in formats and artifact.format not in formats[response.data_type]:
+            raise ValueError(f"{response.response_id}: artifact format does not match {response.data_type}")
+        if not artifact.path or not Path(artifact.path).is_file():
+            raise ValueError(f"{response.response_id}: artifact file is missing: {artifact.path!r}")
+        try:
+            if artifact.format in (ArtifactFormat.GEOTIFF, ArtifactFormat.COG):
+                import rasterio
+                with rasterio.open(artifact.path) as raster:
+                    if raster.crs is None or not raster.count:
+                        raise ValueError("raster has no CRS or bands")
+                    declared_crs = (artifact.metadata or {}).get("crs")
+                    if declared_crs and raster.crs != rasterio.crs.CRS.from_user_input(declared_crs):
+                        raise ValueError("raster CRS does not match its metadata")
+                    metadata = artifact.metadata or {}
+                    band_count = metadata.get("band_count")
+                    if band_count is not None and band_count != raster.count:
+                        raise ValueError("raster band count does not match its metadata")
+                    bands = metadata.get("bands")
+                    if bands and (not isinstance(bands, list) or len(bands) != raster.count):
+                        raise ValueError("raster band list does not match the file's band count")
+            elif artifact.format in (ArtifactFormat.JSON, ArtifactFormat.GEOJSON):
+                with open(artifact.path) as stream:
+                    payload = json.load(stream)
+                if artifact.format == ArtifactFormat.GEOJSON and (
+                    not isinstance(payload, dict) or payload.get("type") != "FeatureCollection"
+                    or not isinstance(payload.get("features"), list) or not payload["features"]
+                ):
+                    raise ValueError("expected a nonempty GeoJSON FeatureCollection")
+                if artifact.format == ArtifactFormat.GEOJSON:
+                    features = payload["features"]
+                    if artifact.features_count is not None and artifact.features_count != len(features):
+                        raise ValueError("GeoJSON feature count does not match its metadata")
+                    if artifact.geom_types is not None:
+                        actual_types = set()
+                        for feature in features:
+                            geometry = feature.get("geometry") if isinstance(feature, dict) else None
+                            if not isinstance(geometry, dict) or not isinstance(geometry.get("type"), str):
+                                raise ValueError("GeoJSON contains a missing or malformed geometry")
+                            actual_types.add(geometry["type"])
+                        if actual_types != set(artifact.geom_types):
+                            raise ValueError("GeoJSON geometry types do not match its metadata")
+        except (OSError, ValueError) as error:
+            raise ValueError(f"{response.response_id}: unreadable or invalid artifact: {error}") from error
+    elif not response.data:
+        raise ValueError(f"{response.response_id}: response has no data or artifact")
+
+    def check_nested(value):
+        if isinstance(value, list):
+            for item in value:
+                check_nested(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key in ("path", "url", "items_json_path", "saved_intermediate_path") and isinstance(item, str):
+                    suffix = Path(item).suffix.lower()
+                    format_ = {".tif": ArtifactFormat.GEOTIFF, ".tiff": ArtifactFormat.GEOTIFF,
+                               ".geojson": ArtifactFormat.GEOJSON, ".json": ArtifactFormat.JSON}.get(suffix)
+                    if not item or format_:
+                        validate_response_artifacts(GeoFahamToolResponse(
+                            response_id=response.response_id, source=response.source,
+                            data_type=DataType.RASTER if format_ == ArtifactFormat.GEOTIFF else DataType.JSON,
+                            artifact=SavedArtifact(path=item, format=format_ or ArtifactFormat.JSON),
+                        ))
+                elif key in ("saved_paths", "saved_intermediate_paths") and isinstance(item, dict):
+                    for path in item.values():
+                        check_nested({"path": path})
+                else:
+                    check_nested(item)
+
+    if response.data_type in (DataType.RASTER_MULTI, DataType.RASTER_INTERMEDIATE, DataType.STAC_ITEMS):
+        check_nested(response.data)
+        check_nested(response.metadata or {})
 
 
 def generate_response_id(prefix: str) -> str:
@@ -51,6 +139,7 @@ def build_layer_response(
     metadata: Optional[Dict[str, Any]] = None,
     data_type: DataType = DataType.VECTOR,
     artifact_format: ArtifactFormat = ArtifactFormat.GEOJSON,
+    artifact_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Build a LAYER response for map visualization.
@@ -89,6 +178,7 @@ def build_layer_response(
         stats=stats,
         property_keys=property_keys,
         geom_types=geom_types,
+        metadata=artifact_metadata,
     )
     
     response = GeoFahamToolResponse(
@@ -116,6 +206,7 @@ def build_raster_layer_response(
     response_id: Optional[str] = None,
     stats: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    artifact_metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Build a LAYER response specifically for raster outputs.
@@ -143,12 +234,12 @@ def build_raster_layer_response(
         content_type="image/tiff",
         format=ArtifactFormat.GEOTIFF,
         stats=stats,
-        metadata={
+        metadata=artifact_metadata if artifact_metadata is not None else {
             "crs": crs,
             "bounds": bounds,
             "resolution": resolution,
             "bands": bands or [],
-        }
+        },
     )
     
     response = GeoFahamToolResponse(

@@ -31,8 +31,6 @@ except ImportError:
 
 from autogen_core import CancellationToken
 
-from agents.core.config import get_config
-from agents.core.constants import AGENT_NAMES
 from agents.base.client import init_model_client
 
 
@@ -89,16 +87,15 @@ AGENT_TOOLS = {
 
 def create_agent_for_tools(agent_type: str):
     """Create an agent to access its tools."""
-    config = get_config()
     agent_info = AGENT_TOOLS[agent_type]
     
-    model = config.get_agent_model(agent_info["agent_key"])
-    client = init_model_client(model=model)
+    agent_key = agent_info["agent_key"]
+    client = init_model_client(client_key=agent_key)
     
     module = __import__(agent_info["module"], fromlist=[agent_info["factory"]])
     factory = getattr(module, agent_info["factory"])
     
-    return factory(client), model
+    return factory(client), agent_key
 
 
 def list_tools(agent) -> List[Dict[str, Any]]:

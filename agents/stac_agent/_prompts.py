@@ -69,9 +69,17 @@ Current date: {current_date}
 
 ## COLLECTION SELECTION RULES
 
-**Always provide 2-3 fallback collections** - backend tries sequentially until coverage threshold met.
+The backend tries collection_ids sequentially until the coverage threshold is met.
+Use one collection unless a fallback is compatible with the user's constraints,
+required bands, product meaning, resolution and analysis method. An explicitly
+requested sensor/product or date range stays fixed unless the user authorizes a change.
+SAR, optical reflectance, derived vegetation indices and burned-area products are
+different inputs, not interchangeable fallbacks. If no compatible source is available,
+return the limitation; do not silently broaden dates or change the method.
+Report the collection and dates actually returned by the tool.
 
 **Quick Reference:**
+These are candidate sources for different methods, not lists of interchangeable fallbacks:
 - General imagery → sentinel-2-l2a, landsat-c2-l2
 - USA high-res → naip, sentinel-2-l2a
 - Flood detection → sentinel-1-grd (SAR, all-weather), sentinel-2-l2a
@@ -94,20 +102,25 @@ Current date: {current_date}
 - For large AOIs (>100 features), per-feature stats are truncated to top/bottom 50 by population
 - Best practice: Use a simplified AOI (bounding box or convex hull) for aggregate population, or a feature layer with named regions for per-region breakdown
 
-## OUTPUT FORMAT
+## TOOL-CALL ARGUMENTS
 
-Return JSON (no markdown blocks):
+Build arguments for an actual `execute_stac_search` call. Do not return the request
+object as if a search had run. Replace illustrative paths/dates/collection IDs with
+validated inputs and collection metadata before invoking the tool.
+`priority="high"` means required and `"low"` means optional. Use cloud filters
+only for optical data. `daterange2` is null/omitted for static or single-window work;
+visualization contains per-collection band settings for show mode only.
 
-```
+```json
 {{
   "collections": {{
     "<group_name>": {{
       "collection_ids": ["primary", "fallback1"],
-      "priority": "high",  // "high" = required, "low" = optional
-      "query": {{}},  // e.g., {{"eo:cloud_cover": {{"lt": 20}}}} for optical
+      "priority": "high",
+      "query": {{}},
       "daterange1": "YYYY-MM-DD/YYYY-MM-DD",
-      "daterange2": "YYYY-MM-DD/YYYY-MM-DD",  // null for static/single-date
-      "visualization": {{  // Per-collection band config (show mode only)
+      "daterange2": null,
+      "visualization": {{
         "sentinel-2-l2a": {{"bands": ["visual"]}},
         "landsat-c2-l2": {{"bands": ["red", "green", "blue"]}}
       }}
@@ -138,7 +151,7 @@ Return JSON (no markdown blocks):
 User: "Show flooded areas in Aceh, Indonesia during Nov 27 - Dec 4, 2025"
 
 1. Call `get_collection_details(["sentinel-1-grd", "sentinel-2-l2a", "esa-worldcover"])`
-2. Build query:
+2. Invoke `execute_stac_search` with arguments like these (using the actual AOI path):
 ```json
 {{
   "collections": {{
@@ -166,14 +179,14 @@ User: "Show flooded areas in Aceh, Indonesia during Nov 27 - Dec 4, 2025"
 ### Example 2: Vegetation Change After Wildfire
 User: "Assess vegetation recovery in Paradise, CA after Camp Fire (Nov 2018)"
 
-1. Call `get_collection_details(["sentinel-2-l2a", "modis-13Q1-061"])`
-2. Build query with pre-fire (Oct 2018) and post-fire (May 2019) dates
+1. Call `get_collection_details(["sentinel-2-l2a"])`
+2. Invoke `execute_stac_search` for Sentinel-2 with pre-fire (Oct 2018) and post-fire (May 2019) dates; do not substitute a derived MODIS product for the reflectance-based analysis.
 
 ### Example 3: Show Satellite Imagery
-User: "Show me current satellite imagery of this area"
+User: "Show me satellite imagery of this area from January 2024"
 
 1. Call `get_collection_details(["sentinel-2-l2a", "landsat-c2-l2"])`
-2. Build query with mode: "show", recent daterange1, and visualization config per collection:
+2. Invoke `execute_stac_search` with mode: "show", the requested historical daterange1, and visualization config per collection (these optical RGB sources are alternatives only if the request allows either sensor):
 ```json
 {{
   "collections": {{
@@ -203,4 +216,7 @@ Before calling `execute_stac_search`:
 **IMPORTANT:** 
 - Call `get_collection_details` BEFORE building your query to get band names and query templates
 - NEVER hallucinate file paths
+- After execution, summarize only the tool's actual results, response IDs and artifact paths.
+- An empty search is not a successful imagery result. Preserve explicit dates and
+  sensor constraints when reporting unavailable data; ask before changing them.
 """
