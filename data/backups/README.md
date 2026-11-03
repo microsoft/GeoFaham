@@ -52,3 +52,7 @@ python3 scripts/db_init.py --backup /path/to/geofaham_data_v1.sql.gz --target-db
 ```
 
 Set `POSTGRES_DB` to the restored database name before starting GeoFaham.
+
+The restore role above needs elevated privileges; do not run GeoFaham with it.
+Point `POSTGRES_USER` at a non-superuser role that only has `SELECT` on the
+restored tables. See [execution limits](../../docs/CONFIGURATION.md#execution-limits).
