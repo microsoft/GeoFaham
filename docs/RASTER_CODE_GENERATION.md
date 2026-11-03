@@ -62,9 +62,11 @@ default, including startup and export). Direct calls to
 `RasterCodeExecutor.execute()` bypass that process and time limit.
 
 `asteval` exposes the listed libraries and helpers. Direct `open`, `eval`, `exec`,
-and `compile` functions are excluded, but exposed library objects retain file
-and network capabilities. The worker has no OS-level filesystem, network, or
-memory isolation.
+and `compile` functions are excluded. The worker also drops credentials from its
+environment and, while generated code runs, blocks Python-level file access
+outside the GeoFaham data folders, outbound sockets, subprocesses and `ctypes`.
+Native GDAL I/O is not covered and the worker has no OS-level filesystem,
+network, or memory isolation.
 
 See [configuration](CONFIGURATION.md#execution-limits) for timeout settings and
 [tool responses](TOOL_RESPONSE_SCHEMAS.md) for output fields.
