@@ -173,10 +173,9 @@ const GeoFahamUtils = {
      * Parse markdown content (uses marked library)
      */
     parseMarkdown: function(content) {
-        if (typeof marked !== 'undefined') {
-            return marked.parse(content);
-        }
-        return content;
+        // Chat text can carry model output, OSM names and database rows, so it is never trusted HTML.
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return this.escapeHtml(content);
+        return DOMPurify.sanitize(marked.parse(content));
     },
 
     /**
@@ -190,7 +189,7 @@ const GeoFahamUtils = {
             '"': '&quot;',
             "'": '&#039;'
         };
-        return text.replace(/[&<>"']/g, m => map[m]);
+        return String(text ?? '').replace(/[&<>"']/g, m => map[m]);
     },
 
     /**

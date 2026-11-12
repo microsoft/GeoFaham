@@ -583,7 +583,7 @@ const LayerRenderer = {
                         displayValue = value ? 'Yes' : 'No';
                     }
 
-                    content += `<p style="margin: 4px 0;"><strong>${displayKey}:</strong> ${displayValue}</p>`;
+                    content += `<p style="margin: 4px 0;"><strong>${GeoFahamUtils.escapeHtml(displayKey)}:</strong> ${GeoFahamUtils.escapeHtml(displayValue)}</p>`;
                 }
             });
         }

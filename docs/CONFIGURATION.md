@@ -16,6 +16,7 @@
 | `GEOFAHAM_BASE_DIR` | No | ./runtime | Runtime artifacts directory |
 | `GEOFAHAM_DATA_DIR` | No | ./data | Static data directory |
 | `GEOFAHAM_ALLOWED_ORIGINS` | No | - | Comma-separated extra browser origins (e.g. `https://maps.example.com`) allowed to use `/ws/chat`, uploads and reset; same-origin requests are always allowed |
+| `GEOFAHAM_RASTER_HOSTS` | No | - | Comma-separated extra HTTPS hosts the tile server and `/api/raster/info` may read (prefix with `.` for a domain suffix). Local rasters must sit under `GEOFAHAM_BASE_DIR`, `GEOFAHAM_DATA_DIR` or `USER_DATA_PATH`; `planetarycomputer.microsoft.com` and `*.blob.core.windows.net` are always allowed |
 
 ## Model clients
 

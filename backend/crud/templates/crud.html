@@ -248,6 +248,8 @@
     // Hold DataTable instances
     let disasterDT, bdaDT, floodMapDT;
     let detailsMap = null;
+    // Database text is rendered through innerHTML and DataTables, so escape it first.
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
     // Function to show details modal
     async function showDetailsModal(type, id) {
@@ -297,7 +299,7 @@
       } catch (error) {
         modalContent.innerHTML = `
           <div class="alert alert-danger" role="alert">
-            Error loading details: ${error.message}
+            Error loading details: ${esc(error.message)}
           </div>
         `;
       }
@@ -309,17 +311,17 @@
       
       switch(type) {
         case 'disaster':
-          const location = [data.area, data.city, data.county, data.state, data.country].filter(Boolean).join(', ') || 'N/A';
+          const location = esc([data.area, data.city, data.county, data.state, data.country].filter(Boolean).join(', ') || 'N/A');
           html = `
             <div class="detail-section">
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">ID:</div>
-                  <div>${data.id}</div>
+                  <div>${esc(data.id)}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Type:</div>
-                  <div>${data.disaster_type || 'N/A'}</div>
+                  <div>${esc(data.disaster_type || 'N/A')}</div>
                 </div>
               </div>
             </div>
@@ -327,7 +329,7 @@
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">Date:</div>
-                  <div>${data.disaster_date || 'N/A'}</div>
+                  <div>${esc(data.disaster_date || 'N/A')}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Location:</div>
@@ -337,7 +339,7 @@
             </div>
             <div class="detail-section">
               <div class="detail-label">Description:</div>
-              <div>${data.description || 'N/A'}</div>
+              <div>${esc(data.description || 'N/A')}</div>
             </div>
           `;
           break;
@@ -348,7 +350,7 @@
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">ID:</div>
-                  <div>${data.id}</div>
+                  <div>${esc(data.id)}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Damaged:</div>
@@ -360,11 +362,11 @@
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">Damage Percentage:</div>
-                  <div>${data.damage_pct !== null ? data.damage_pct + '%' : 'N/A'}</div>
+                  <div>${data.damage_pct !== null ? esc(data.damage_pct) + '%' : 'N/A'}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Disaster ID:</div>
-                  <div>${data.disaster_id || 'N/A'}</div>
+                  <div>${esc(data.disaster_id || 'N/A')}</div>
                 </div>
               </div>
             </div>
@@ -377,11 +379,11 @@
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">ID:</div>
-                  <div>${data.id}</div>
+                  <div>${esc(data.id)}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Disaster ID:</div>
-                  <div>${data.disaster_id || 'N/A'}</div>
+                  <div>${esc(data.disaster_id || 'N/A')}</div>
                 </div>
               </div>
             </div>
@@ -389,18 +391,18 @@
               <div class="row">
                 <div class="col-md-6">
                   <div class="detail-label">Source:</div>
-                  <div>${data.source || 'N/A'}</div>
+                  <div>${esc(data.source || 'N/A')}</div>
                 </div>
                 <div class="col-md-6">
                   <div class="detail-label">Created:</div>
-                  <div>${data.created_at || 'N/A'}</div>
+                  <div>${esc(data.created_at || 'N/A')}</div>
                 </div>
               </div>
             </div>
             ${data.metadata ? `
             <div class="detail-section">
               <div class="detail-label">Metadata:</div>
-              <div><pre>${JSON.stringify(data.metadata, null, 2)}</pre></div>
+              <div><pre>${esc(JSON.stringify(data.metadata, null, 2))}</pre></div>
             </div>
             ` : ''}
           `;
@@ -508,10 +510,10 @@
       const data = await res.json();
       const rows = data.items.map(r => [
         r.id,
-        r.damaged,
-        r.damage_pct ?? '',
-        r.disaster_id ?? '',
-        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='bda'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='bda'>Del</button>`
+        esc(r.damaged),
+        esc(r.damage_pct),
+        esc(r.disaster_id),
+        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${esc(r.id)}' data-view='bda'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${esc(r.id)}' data-del='bda'>Del</button>`
       ]);
       ensureBdaDT(rows);
     }
@@ -521,9 +523,9 @@
       const data = await res.json();
       const rows = data.items.map(r => [
         r.id,
-        r.disaster_id ?? '',
-        r.source ?? '',
-        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='floodmap'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='floodmap'>Del</button>`
+        esc(r.disaster_id),
+        esc(r.source),
+        `<button class='btn btn-sm btn-outline-primary me-1' data-id='${esc(r.id)}' data-view='floodmap'>View</button><button class='btn btn-sm btn-outline-danger' data-id='${esc(r.id)}' data-del='floodmap'>Del</button>`
       ]);
       ensureFloodMapDT(rows);
     }
@@ -531,13 +533,13 @@
       const res = await fetch('/api/disasters');
       const data = await res.json();
       const rows = data.items.map(r => {
-        const location = [r.area, r.city, r.county, r.state, r.country].filter(Boolean).join(', ') || '';
+        const location = esc([r.area, r.city, r.county, r.state, r.country].filter(Boolean).join(', '));
         return [
           r.id,
-          r.disaster_type,
-          r.disaster_date ?? '',
+          esc(r.disaster_type),
+          esc(r.disaster_date),
           location,
-          `<button class='btn btn-sm btn-outline-primary me-1' data-id='${r.id}' data-view='disaster'>View</button><button class='btn btn-sm btn-outline-warning me-1' data-id='${r.id}' data-edit='disaster'>Edit</button><button class='btn btn-sm btn-outline-danger' data-id='${r.id}' data-del='disaster'>Del</button>`
+          `<button class='btn btn-sm btn-outline-primary me-1' data-id='${esc(r.id)}' data-view='disaster'>View</button><button class='btn btn-sm btn-outline-warning me-1' data-id='${esc(r.id)}' data-edit='disaster'>Edit</button><button class='btn btn-sm btn-outline-danger' data-id='${esc(r.id)}' data-del='disaster'>Del</button>`
         ];
       });
       ensureDisasterDT(rows);
@@ -545,18 +547,20 @@
     async function loadLookups() {
       const disastersRes = await fetch('/api/lookups/disasters');
       const disasters = await disastersRes.json();
+      const option = (d, withArea) => `<option value='${esc(d.id)}'>${withArea ? esc(d.area) + ' ' : ''}${esc(d.disaster_type)} ${d.disaster_date ? '(' + esc(d.disaster_date) + ')' : ''}</option>`;
+      const areaOptions = disasters.map(d => option(d, true)).join('');
       const bdaDisSel = document.getElementById('bdaDisasterSelect');
-      bdaDisSel.innerHTML = '<option value="">-- None --</option>' + disasters.map(d => `<option value='${d.id}'>${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+      bdaDisSel.innerHTML = '<option value="">-- None --</option>' + disasters.map(d => option(d, false)).join('');
       // Repopulate bulk selects too
       const bulkBdaDisSel = document.getElementById('bulkBdaDisasterSelect');
       if (bulkBdaDisSel) {
         // console.log(disasters)
-        bulkBdaDisSel.innerHTML = disasters.map(d => `<option value='${d.id}'>${d.area} ${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+        bulkBdaDisSel.innerHTML = areaOptions;
       }
       // Populate flood map disaster select
       const floodMapDisSel = document.getElementById('floodMapDisasterSelect');
       if (floodMapDisSel) {
-        floodMapDisSel.innerHTML = disasters.map(d => `<option value='${d.id}'>${d.area} ${d.disaster_type} ${d.disaster_date ? ('(' + d.disaster_date + ')') : ''}</option>`).join('');
+        floodMapDisSel.innerHTML = areaOptions;
       }
     }
     document.body.addEventListener('click', async e => {

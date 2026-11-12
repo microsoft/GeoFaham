@@ -19,7 +19,9 @@ from agents.core.config import AgentsConfig, ConfigProvider, QueryConfig
 from agents.core.response_store import ResponseStore, ResponseStoreProvider
 from agents.core.types import GeoFahamToolResponse
 from agents.orchestrator_agent.orchestrator import GeoFahamOrchestrator
-from agents.vector_agent.tools import VectorQueryExecutor, _is_safe_query
+from agents.vector_agent.tools import (
+    VectorQueryExecutor, _is_safe_query, _is_single_read_statement, _process_geojson_placeholders,
+)
 from agents.shared.responses import validate_response_artifacts
 from backend.routes import raster, websocket
 from tests.test_workflow_contracts import ledger, manager
@@ -101,6 +103,22 @@ class SqlSafetyTests(unittest.TestCase):
             "SELECT * FROM dblink('host=x', 'SELECT 1') AS t(a int)",
         ):
             self.assertFalse(_is_safe_query(query), query)
+
+    def test_uploaded_geojson_names_and_values_cannot_add_statements(self):
+        bad_key = "a) AS (SELECT 1, 'x', 'y') SELECT 1; COMMIT; DELETE FROM disasters; --"
+        features = [
+            {"geometry": {"type": "Point", "coordinates": [0, 0], "x": "'); DROP TABLE disasters; --"},
+             "properties": {"name": "O'Brien", "depth": 1.5, bad_key: "x"}},
+            {"geometry": {"type": "Point", "coordinates": [1, 1]},
+             "properties": {"name": "b", "depth": "1); COMMIT; DELETE FROM disasters; --"}},
+        ]
+        keys = {"points": {"name": "str", "depth": "float", bad_key: "str"}}
+        sql = _process_geojson_placeholders(
+            "WITH {{GEOJSON_POINTS_CTE}} SELECT name, depth FROM points_from_geojson",
+            {"feature_count": 2, "features_by_type": {"points": features}}, keys)
+        self.assertTrue(_is_single_read_statement(sql), sql)
+        self.assertIn("points_from_geojson(id, name, depth, \"a) AS", sql)
+        self.assertFalse(_is_single_read_statement(f"WITH t(id, {bad_key}) AS (SELECT 1)"))
 
 
 class SqlCancellationTests(unittest.IsolatedAsyncioTestCase):

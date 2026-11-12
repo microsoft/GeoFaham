@@ -7,10 +7,11 @@ Supports both local files and remote COG URLs, and MosaicJSON for multi-image re
 """
 
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Annotated, Optional, Dict, Any, Tuple
 from enum import Enum
 import logging
-from fastapi import FastAPI, Request
+from urllib.parse import urlsplit
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from titiler.core.factory import TilerFactory, ColorMapFactory
 from titiler.mosaic.factory import MosaicTilerFactory
@@ -38,7 +39,42 @@ except ImportError:
     MPC_AVAILABLE = False
     print("Warning: planetary_computer not available. MPC URLs will not be signed.")
 
+from agents.core.config import get_config
+
 logger = logging.getLogger(__name__)
+
+_RASTER_HOSTS = ("planetarycomputer.microsoft.com", ".blob.core.windows.net")
+
+
+def _raster_hosts() -> tuple:
+    extra = os.getenv("GEOFAHAM_RASTER_HOSTS", "")
+    return _RASTER_HOSTS + tuple(h.strip().lower() for h in extra.split(",") if h.strip())
+
+
+def checked_raster_source(url: str) -> str:
+    """Allow local rasters inside the GeoFaham data folders and HTTPS rasters on known imagery hosts."""
+    if url.lower().startswith(("http://", "https://")):
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        allowed = any(host == h or (h.startswith(".") and host.endswith(h)) for h in _raster_hosts())
+        if parts.scheme.lower() == "https" and allowed and parts.username is None and "\\" not in url:
+            return url
+        raise ValueError(f"Raster host is not allowed: {host or url}")
+    config = get_config()
+    path = os.path.realpath(url)
+    for root in filter(None, (config.paths.base_dir, config.paths.data_dir, os.getenv("USER_DATA_PATH"))):
+        root = os.path.realpath(root)
+        if path == root or path.startswith(root + os.sep):
+            return path
+    raise ValueError("Raster path is outside the GeoFaham data folders")
+
+
+def RasterPathParams(url: Annotated[str, Query(description="Dataset URL")]) -> str:
+    """TiTiler path dependency that only opens allowed raster sources."""
+    try:
+        return checked_raster_source(url)
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail=str(error))
 
 
 # Custom reader function to sign Microsoft Planetary Computer URLs
@@ -139,7 +175,7 @@ def create_titiler_app() -> FastAPI:
     # - /cog/statistics - Get statistics
     # - /cog/preview - Get preview image
     # - /cog/point - Get point value
-    cog = TilerFactory(router_prefix="/cog")
+    cog = TilerFactory(router_prefix="/cog", path_dependency=RasterPathParams)
     app.include_router(cog.router, prefix="/cog", tags=["Cloud Optimized GeoTIFF"])
     colormap = ColorMapFactory(router_prefix="/colormap")
     app.include_router(colormap.router, prefix="/colormap", tags=["Colormaps"])
@@ -148,12 +184,9 @@ def create_titiler_app() -> FastAPI:
     # - /mosaicjson/info - Get mosaic info
     # - /mosaicjson/{z}/{x}/{y}/assets - Get assets for tile
     # - /mosaicjson/point - Get point value from mosaic
-    if CACHE_AVAILABLE:
-        mosaic = CachedMosaicTilerFactory(router_prefix="/mosaicjson", backend=MosaicBackend)
-        logger.info("Using CachedMosaicTilerFactory with tile caching enabled")
-    else:
-        mosaic = MosaicTilerFactory(router_prefix="/mosaicjson", backend=MosaicBackend)
-        logger.info("Using standard MosaicTilerFactory (no caching)")
+    factory = CachedMosaicTilerFactory if CACHE_AVAILABLE else MosaicTilerFactory
+    mosaic = factory(router_prefix="/mosaicjson", backend=MosaicBackend, path_dependency=RasterPathParams)
+    logger.info(f"Using {factory.__name__} for MosaicJSON tiles")
     
     app.include_router(mosaic.router, prefix="/mosaicjson", tags=["MosaicJSON"])
     
@@ -203,9 +236,7 @@ class RasterService:
             Dictionary with raster metadata
         """
         try:
-            if not url.startswith(('http://', 'https://')):
-                url = os.path.abspath(url)
-            
+            url = checked_raster_source(url)
             with RioReader(url) as src:
                 info = src.info()
                 
