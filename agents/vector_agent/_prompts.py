@@ -208,6 +208,7 @@ The `artifact.property_keys` structure shows columns available in the CTE:
 }
 ```
 Use these property names in your SQL. Only listed properties are available as columns.
+Names with characters other than letters, digits and underscores must be double-quoted exactly as listed, e.g. `"addr:street"` or `"Damage Level"`.
 
 **Step 3: Write SQL with Placeholders**
 Use these placeholders in the WITH clause (do NOT parse GeoJSON directly):

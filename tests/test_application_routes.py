@@ -3,14 +3,22 @@
 
 """Application routes retained when integrating agent workflows."""
 
+import os
+import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
 
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.routes import reset
+from backend.services import raster_service
 from backend.services.origin_policy import OriginCheckMiddleware
 import server
 
@@ -69,3 +77,34 @@ class OriginPolicyTests(unittest.TestCase):
         for origin in ("https://evil.example", "null", "http://testserver.evil.example"):
             self.assertEqual(client.post("/change", headers={"Origin": origin}).status_code, 403, origin)
         self.assertEqual(client.get("/change", headers={"Origin": "https://evil.example"}).status_code, 405)
+
+
+class RasterSourceTests(unittest.TestCase):
+    def test_raster_routes_only_open_data_folder_files_and_imagery_hosts(self):
+        client = TestClient(server.app)
+        with tempfile.TemporaryDirectory() as base:
+            path = os.path.join(base, "r.tif")
+            with rasterio.open(path, "w", driver="GTiff", width=4, height=4, count=1, dtype="uint8",
+                               crs="EPSG:4326", transform=from_origin(0, 4, 1, 1)) as dst:
+                dst.write(np.ones((1, 4, 4), dtype="uint8"))
+            paths = SimpleNamespace(paths=SimpleNamespace(base_dir=base, data_dir=base))
+            with patch.object(raster_service, "get_config", return_value=paths):
+                self.assertEqual(client.get("/tiles/cog/info", params={"url": path}).status_code, 200)
+                self.assertEqual(client.get("/api/raster/info", params={"url": path}).status_code, 200)
+                for url in ("/etc/hosts", os.path.join(base, "..", "x.tif"),
+                            "/vsicurl/http://169.254.169.254/latest/meta-data",
+                            "http://169.254.169.254/x.tif", "https://169.254.169.254/x.tif",
+                            "https://planetarycomputer.microsoft.com@169.254.169.254/x.tif"):
+                    self.assertEqual(client.get("/tiles/cog/info", params={"url": url}).status_code, 403, url)
+                    self.assertEqual(client.get("/api/raster/info", params={"url": url}).status_code, 403, url)
+                # A VRT renamed to .tif can point at any file; only GeoTIFF is opened
+                vrt = os.path.join(base, "vrt.tif")
+                with open(vrt, "w") as f:
+                    f.write(f'<VRTDataset rasterXSize="4" rasterYSize="4"><VRTRasterBand dataType="Byte" band="1">'
+                            f'<SimpleSource><SourceFilename>{path}</SourceFilename></SimpleSource></VRTRasterBand></VRTDataset>')
+                self.assertGreaterEqual(client.get("/tiles/cog/info", params={"url": vrt}).status_code, 400)
+                self.assertGreaterEqual(client.get("/api/raster/info", params={"url": vrt}).status_code, 400)
+                self.assertFalse(raster_service.raster_service.validate_raster(vrt)[0])
+                self.assertTrue(raster_service.raster_service.validate_raster(path)[0])
+        blob = "https://sentinel2l2a01.blob.core.windows.net/x/B04.tif"
+        self.assertEqual(raster_service.checked_raster_source(blob), blob)

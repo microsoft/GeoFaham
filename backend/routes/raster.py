@@ -35,6 +35,8 @@ async def get_raster_info(url: str):
     try:
         info = raster_service.get_raster_info(url)
         return JSONResponse(content=info)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting raster info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

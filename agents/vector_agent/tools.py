@@ -9,6 +9,7 @@ Refactored for clarity, maintainability, and proper error handling.
 """
 
 import json
+import math
 import os
 import re
 import datetime
@@ -263,6 +264,14 @@ def _parse_geojson_files(paths: Union[str, List[str]]) -> Dict[str, Any]:
 # =============================================================================
 
 
+_SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _sql_column(name: str) -> str:
+    """Uploaded property names become CTE columns: plain names stay unquoted, others are quoted."""
+    return name if _SQL_IDENTIFIER.fullmatch(name) else '"' + name.replace('"', '""') + '"'
+
+
 def _escape_sql_string(value: str) -> str:
     """Escape single quotes for SQL strings."""
     return str(value).replace("'", "''")
@@ -276,7 +285,11 @@ def _format_property_value(value: Any, prop_type: str) -> str:
     if prop_type == "str":
         return f"'{_escape_sql_string(value)}'"
     elif prop_type in ("int", "float"):
-        return str(value)
+        try:
+            number = int(value) if prop_type == "int" else float(value)
+        except (TypeError, ValueError):
+            return "NULL"
+        return repr(number) if math.isfinite(number) else "NULL"
     elif prop_type == "bool":
         if isinstance(value, bool):
             return "TRUE" if value else "FALSE"
@@ -301,7 +314,7 @@ def _get_null_typed(prop_type: str) -> str:
 
 def _geojson_to_postgis(geometry: Dict[str, Any]) -> str:
     """Convert GeoJSON geometry to PostGIS ST_GeomFromGeoJSON expression."""
-    return f"ST_GeomFromGeoJSON('{json.dumps(geometry)}')"
+    return f"ST_GeomFromGeoJSON('{_escape_sql_string(json.dumps(geometry))}')"
 
 
 def _normalize_property_type(ptype: Any) -> str:
@@ -369,7 +382,7 @@ def _build_cte_for_geometry_type(
         # Empty CTE with correct column structure
         if property_keys:
             null_values = [_get_null_typed(_normalize_property_type(t)) for t in property_keys.values()]
-            columns = f"id, {', '.join(property_keys.keys())}, geom"
+            columns = f"id, {', '.join(map(_sql_column, property_keys))}, geom"
             return f"{cte_name}({columns}) AS (SELECT NULL::integer AS id, {', '.join(null_values)}, NULL::geometry AS geom WHERE FALSE)"
         else:
             return f"{cte_name}(id, name, type, geom) AS (SELECT NULL::integer, NULL::text, NULL::text, NULL::geometry WHERE FALSE)"
@@ -385,7 +398,7 @@ def _build_cte_for_geometry_type(
                 for name, ptype in property_keys.items()
             ]
             values.append(f"({i + 1}, {', '.join(prop_values)}, {geom_sql})")
-            columns = f"id, {', '.join(property_keys.keys())}, geom"
+            columns = f"id, {', '.join(map(_sql_column, property_keys))}, geom"
         else:
             # Default columns
             name = _escape_sql_string(props.get("name", f"Feature_{i + 1}"))
@@ -530,6 +543,11 @@ def _is_safe_query(query: str) -> bool:
     query_no_comments = _strip_sql_comments(query)
     if _FORBIDDEN_PATTERN.search(query_no_comments):
         return False
+    return _is_single_read_statement(query)
+
+
+def _is_single_read_statement(query: str) -> bool:
+    """Structural check that also holds after GeoJSON data is expanded into the query."""
     code = _SQL_NON_CODE.sub(" ", query)
     if re.search(r";\s*\S", code) or not _READ_STATEMENT_START.match(code):
         return False
@@ -844,6 +862,8 @@ class VectorQueryExecutor:
             enhanced_query = _process_geojson_placeholders(query, geom_info, property_keys)
         except Exception as e:
             return self._error_response(resp_id, f"GeoJSON processing error: {e}")
+        if not _is_single_read_statement(enhanced_query):
+            return self._error_response(resp_id, "GeoJSON data produced an unsafe query.")
         
         # Call internal impl directly - safety already verified on template
         return await self._execute_query_impl(
