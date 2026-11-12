@@ -97,5 +97,14 @@ class RasterSourceTests(unittest.TestCase):
                             "https://planetarycomputer.microsoft.com@169.254.169.254/x.tif"):
                     self.assertEqual(client.get("/tiles/cog/info", params={"url": url}).status_code, 403, url)
                     self.assertEqual(client.get("/api/raster/info", params={"url": url}).status_code, 403, url)
+                # A VRT renamed to .tif can point at any file; only GeoTIFF is opened
+                vrt = os.path.join(base, "vrt.tif")
+                with open(vrt, "w") as f:
+                    f.write(f'<VRTDataset rasterXSize="4" rasterYSize="4"><VRTRasterBand dataType="Byte" band="1">'
+                            f'<SimpleSource><SourceFilename>{path}</SourceFilename></SimpleSource></VRTRasterBand></VRTDataset>')
+                self.assertGreaterEqual(client.get("/tiles/cog/info", params={"url": vrt}).status_code, 400)
+                self.assertGreaterEqual(client.get("/api/raster/info", params={"url": vrt}).status_code, 400)
+                self.assertFalse(raster_service.raster_service.validate_raster(vrt)[0])
+                self.assertTrue(raster_service.raster_service.validate_raster(path)[0])
         blob = "https://sentinel2l2a01.blob.core.windows.net/x/B04.tif"
         self.assertEqual(raster_service.checked_raster_source(blob), blob)

@@ -69,6 +69,16 @@ def checked_raster_source(url: str) -> str:
     raise ValueError("Raster path is outside the GeoFaham data folders")
 
 
+class CheckedReader(RioReader):
+    """Open only allowed sources, and only as GeoTIFF: formats such as VRT can point at any file or URL."""
+
+    def __attrs_post_init__(self):
+        if not self.dataset:
+            self.input = checked_raster_source(self.input)
+            self.dataset = self._ctx_stack.enter_context(rasterio.open(self.input, driver="GTiff"))
+        super().__attrs_post_init__()
+
+
 def RasterPathParams(url: Annotated[str, Query(description="Dataset URL")]) -> str:
     """TiTiler path dependency that only opens allowed raster sources."""
     try:
@@ -175,7 +185,7 @@ def create_titiler_app() -> FastAPI:
     # - /cog/statistics - Get statistics
     # - /cog/preview - Get preview image
     # - /cog/point - Get point value
-    cog = TilerFactory(router_prefix="/cog", path_dependency=RasterPathParams)
+    cog = TilerFactory(router_prefix="/cog", path_dependency=RasterPathParams, reader=CheckedReader)
     app.include_router(cog.router, prefix="/cog", tags=["Cloud Optimized GeoTIFF"])
     colormap = ColorMapFactory(router_prefix="/colormap")
     app.include_router(colormap.router, prefix="/colormap", tags=["Colormaps"])
@@ -185,7 +195,8 @@ def create_titiler_app() -> FastAPI:
     # - /mosaicjson/{z}/{x}/{y}/assets - Get assets for tile
     # - /mosaicjson/point - Get point value from mosaic
     factory = CachedMosaicTilerFactory if CACHE_AVAILABLE else MosaicTilerFactory
-    mosaic = factory(router_prefix="/mosaicjson", backend=MosaicBackend, path_dependency=RasterPathParams)
+    mosaic = factory(router_prefix="/mosaicjson", backend=MosaicBackend, path_dependency=RasterPathParams,
+                     dataset_reader=CheckedReader)
     logger.info(f"Using {factory.__name__} for MosaicJSON tiles")
     
     app.include_router(mosaic.router, prefix="/mosaicjson", tags=["MosaicJSON"])
@@ -212,7 +223,7 @@ class RasterService:
             Tuple of (is_valid, error_message)
         """
         try:
-            with rasterio.open(file_path) as src:
+            with rasterio.open(file_path, driver="GTiff") as src:
                 # Check if it has at least one band
                 if src.count < 1:
                     return False, "Raster has no bands"
@@ -236,8 +247,7 @@ class RasterService:
             Dictionary with raster metadata
         """
         try:
-            url = checked_raster_source(url)
-            with RioReader(url) as src:
+            with CheckedReader(url) as src:
                 info = src.info()
                 
                 # Calculate zoom levels based on resolution
