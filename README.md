@@ -72,8 +72,9 @@ from the server's `/api/config` endpoint.
 
 ### Load the disaster data
 
-Place your copy of `geofaham_data_v1.sql.gz` in `data/backups/`, then follow
-[database setup](data/backups/README.md) to verify and restore them:
+Download the [database snapshot](https://huggingface.co/datasets/msohaildanish/geofaham-data/resolve/main/geofaham_data_v1.sql.gz?download=true)
+into `data/backups/`, then follow [database setup](data/backups/README.md) to
+verify and restore it:
 
 ```bash
 python3 scripts/db_init.py --dry-run
