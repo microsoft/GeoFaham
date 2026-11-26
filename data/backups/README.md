@@ -1,8 +1,18 @@
 # GeoFaham database snapshot v1
 
-Place your copy of `geofaham_data_v1.sql.gz` in this directory. The accompanying
-`.sha256` file verifies the expected snapshot; the archive is not included in Git. The snapshot includes disaster records, building damage assessments,
-flood maps, table definitions, indexes, constraints, and sequences.
+Download [`geofaham_data_v1.sql.gz`](https://huggingface.co/datasets/msohaildanish/geofaham-data/resolve/main/geofaham_data_v1.sql.gz?download=true)
+from the [GeoFaham data repository](https://huggingface.co/datasets/msohaildanish/geofaham-data). The archive is hosted on Hugging Face;
+the checksum and manifest are included here. The snapshot contains disaster
+records, building damage assessments, flood maps, table definitions, indexes,
+constraints, and sequences.
+
+From the GeoFaham repository root:
+
+```bash
+curl --fail --location \
+  --output data/backups/geofaham_data_v1.sql.gz \
+  https://huggingface.co/datasets/msohaildanish/geofaham-data/resolve/main/geofaham_data_v1.sql.gz
+```
 
 ## Requirements
 
